@@ -48,15 +48,34 @@ class NvideoDecoder(VideoDecoder):
         self.duration    = metadata.duration
         self.frame_count = len(self.decoder)
     
-    def get_next_frame(self) -> Optional[VideoFrame]:
-        """Decode next frame. Returns VideoFrame or None on end of video."""
+        # State:
+        self.frame_number = 0
+
+    def get_next_frame(self, speed=1, loop=False) -> Optional[VideoFrame]:
+        """Decode next frame. Returns VideoFrame or None on end of video.
+        Speed is an integer which determines how many frames to move from
+            the prior frame.  It may be negative.
+        If loop is True the video will start over at the end.
+        """
         try:
             # Decode frame
-            frames = self.decoder.get_batch_frames(1)
-            if not frames:  # Empty list on EOF
-                return None
-            
-            nvc_frame = frames[0]
+            if True:
+                self.frame_number += speed
+                if self.frame_number < 0:
+                    self.frame_number = 0
+                try:
+                    nvc_frame = self.decoder[self.frame_number]
+                except IndexError:  # EOF?
+                    if loop and self.frame_number:
+                        self.frame_number = 0
+                        nvc_frame         = self.decoder[self.frame_number] # If we get another IndexError here, something's very wrong
+                    else:
+                        return None
+            else:
+                frames = self.decoder.get_batch_frames(1)
+                if not frames:  # Empty list on EOF
+                    return None
+                nvc_frame = frames[0]
             
             # Extract frame properties
             shape   = nvc_frame.shape

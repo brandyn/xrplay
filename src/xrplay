@@ -134,13 +134,20 @@ class VideoPlayer(object):
         """Main playback loop."""
         print("Playing... Press Q to quit")
 
+        if not self.p_cuda_texture_window:
+            # If we're not rendering the movie to the window, we'll render the help screen:
+            from HelpScreen import render_help
+            render_help()
+            glfw.swap_buffers(self.window)
+
+        speed = 1
         try:
             while not glfw.window_should_close(self.window):
 
                 #
                 # Decode next frame
                 #
-                frame = self.source.get_next_frame()
+                frame = self.source.get_next_frame(speed=speed, loop=True)
 
                 if frame is None:
                     print("End of video")
@@ -161,7 +168,7 @@ class VideoPlayer(object):
                 # CUDA-resident video frame -> OpenXR swapchain
                 if self.p_cuda_xr:
 
-                    # Poll for OpenXR events (CRITICAL!)
+                    # Poll for OpenXR events
                     if not self.xr_device.poll_events():
                         print("Session ended")
                         break
@@ -221,6 +228,16 @@ class VideoPlayer(object):
                 glfw.poll_events()
                 if glfw.get_key(self.window, glfw.KEY_Q) == glfw.PRESS:
                     break
+                if glfw.get_key(self.window, glfw.KEY_RIGHT) == glfw.PRESS:
+                    speed = 10
+                elif glfw.get_key(self.window, glfw.KEY_LEFT) == glfw.PRESS:
+                    speed = -10
+                elif glfw.get_key(self.window, glfw.KEY_UP) == glfw.PRESS:
+                    speed = 100
+                elif glfw.get_key(self.window, glfw.KEY_DOWN) == glfw.PRESS:
+                    speed = -100
+                else:
+                    speed = 1
 
         finally: 
             self.close()

@@ -14,7 +14,7 @@ will also play ordinary videos to the desktop just fine (still no audio though).
 - **Hardware**: NVIDIA GPU (required for CUDA).
 - **NVIDIA CUDA Toolkit**: Install from [NVIDIA’s website](https://developer.nvidia.com/cuda-downloads).
 - **OpenXR Runtime**: For VR mode, install an OpenXR runtime like [WiVRn](https://github.com/WiVRn/WiVRn) or another compatible runtime (SteamVR, etc).
-- **FFmpeg**: Required for video decoding (install via system package manager, e.g., `sudo apt install ffmpeg` on Ubuntu).
+- **FFmpeg**: Required for video demuxing (install via system package manager, e.g., `sudo apt install ffmpeg` on Ubuntu).
 - **Python**: 3.8+
 - **OS**: Tested on Linux; Windows will need some tweaks.
 - **VR**: OpenXR-compatible headset (e.g., Quest 3, optional).
@@ -48,13 +48,13 @@ will also play ordinary videos to the desktop just fine (still no audio though).
 ## Usage
 Run xrplay or cuda-play (same script, different name, slightly different default behavior) from the command line:
 ```bash
-./cuda-play video.mp4       # Desktop playback
-./xrplay video.mp4          # VR playback (180° SBS)
-./cuda-play -s 1920,1080    # Desktop with max width,height
-./cuda-play -f              # Full-screen desktop playback
-./cuda-play -xr video.mp4   # Desktop AND VR playback at the same time
-./xrplay video.mp4 -f       # Fullscreen desktop AND VR playback at the same time
-./xrplay -h                 # Show help
+cuda-play video.mp4       # Desktop playback
+xrplay video.mp4          # VR playback (180° SBS)
+cuda-play -s 1920,1080    # Desktop with max width,height
+cuda-play -f              # Full-screen desktop playback
+cuda-play -xr video.mp4   # Desktop and VR playback at the same time
+xrplay video.mp4 -f       # Fullscreen desktop and VR playback at the same time
+xrplay -h                 # Show help
 ```
 
 - **Controls**: Press `q` to quit. Future updates will add pause, jump, and OpenXR controller support.
