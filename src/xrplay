@@ -140,19 +140,38 @@ class VideoPlayer(object):
             render_help()
             glfw.swap_buffers(self.window)
 
-        speed = 1
+        paused       = False
+        speed        = 1
+        frame_number = -1
+        loop         = True
+
         try:
             while not glfw.window_should_close(self.window):
 
                 #
-                # Decode next frame
+                # Determine the frame number:
                 #
-                frame = self.source.get_next_frame(speed=speed, loop=True)
+                if not paused:
+                    frame_number += speed
+                    if frame_number < 0:
+                        frame_number = 0
+
+                #
+                # Decode the frame
+                #
+                frame = self.source.get_next_frame(int(frame_number))
 
                 if frame is None:
-                    print("End of video")
-                    break
-                
+                    if loop:
+                        frame_number = 0
+                        frame = self.source.get_next_frame(0)
+                        if frame is None:
+                            print("Can't read frame 0 (bad/empty video?)")
+                            break
+                    else:
+                        print("End of video")
+                        break
+
                 #
                 # Render the frame through the active pipelines:
                 #
@@ -175,6 +194,37 @@ class VideoPlayer(object):
 
                     # Begin XR frame
                     frame_info = self.xr_device.begin_frame()
+
+                    controllers = frame_info.get('controllers')
+                    # E.g.:
+                    #   {'left': {'a_button': None,
+                    #             'b_button': None,
+                    #             'grip_pose': {'orientation': (0.5574334263801575,
+                    #                                           -0.12656213343143463,
+                    #                                           -0.31022343039512634,
+                    #                                           0.7596127390861511),
+                    #                           'position': (-0.0639796257019043,
+                    #                                        0.7555080652236938,
+                    #                                        -0.11990729719400406)},
+                    #             'squeeze': 1.0,
+                    #             'thumbstick': (-0.43317973613739014, -0.9013031721115112),
+                    #             'trigger': 1.0,
+                    #             'x_button': 1,
+                    #             'y_button': 1},
+                    #    'right': {'a_button': 0,
+                    #              'b_button': 0,
+                    #              'grip_pose': {'orientation': (-0.08653908967971802,
+                    #                                            0.2893432676792145,
+                    #                                            -0.5636680126190186,
+                    #                                            -0.7688106298446655),
+                    #                            'position': (0.5041968822479248,
+                    #                                         0.7592325806617737,
+                    #                                         -0.10087166726589203)},
+                    #              'squeeze': 0.0,
+                    #              'thumbstick': (0.0, 0.0),
+                    #              'trigger': 0.0,
+                    #              'x_button': None,
+                    #              'y_button': None}}
 
                     #
                     # TODO: Currently if the headset is taken off, this will keep decoding
@@ -202,6 +252,8 @@ class VideoPlayer(object):
                     #  frame timing in XR:
                     #
                     self.xr_device.end_frame()
+                else:
+                    controllers = None
 
                 #
                 # Wait until it's time to display this frame (swap buffers):
@@ -226,16 +278,29 @@ class VideoPlayer(object):
                 # UI / Check for exit
                 #
                 glfw.poll_events()
+
                 if glfw.get_key(self.window, glfw.KEY_Q) == glfw.PRESS:
                     break
-                if glfw.get_key(self.window, glfw.KEY_RIGHT) == glfw.PRESS:
+
+                if controllers:
+                    if controllers.get('right', {}).get('b_button'):
+                        break
+
+                if controllers:
+                    paused = controllers.get('right', {}).get('a_button')
+
+                if glfw.get_key(self.window, glfw.KEY_RIGHT)  == glfw.PRESS:
                     speed = 10
                 elif glfw.get_key(self.window, glfw.KEY_LEFT) == glfw.PRESS:
                     speed = -10
-                elif glfw.get_key(self.window, glfw.KEY_UP) == glfw.PRESS:
+                elif glfw.get_key(self.window, glfw.KEY_UP)   == glfw.PRESS:
                     speed = 100
                 elif glfw.get_key(self.window, glfw.KEY_DOWN) == glfw.PRESS:
                     speed = -100
+                elif controllers:
+                    stick = controllers.get('right', {}).get('thumbstick', (0.0, 0.0))[0]
+                    #print(stick)
+                    speed = 10**stick
                 else:
                     speed = 1
 

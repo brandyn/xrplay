@@ -49,34 +49,21 @@ class NvideoDecoder(VideoDecoder):
         self.frame_count = len(self.decoder)
     
         # State:
-        self.frame_number = 0
+        self.current_frame     = None  # reused sometimes when speed < 1
+        self.current_frame_num = -1
 
-    def get_next_frame(self, speed=1, loop=False) -> Optional[VideoFrame]:
-        """Decode next frame. Returns VideoFrame or None on end of video.
-        Speed is an integer which determines how many frames to move from
-            the prior frame.  It may be negative.
-        If loop is True the video will start over at the end.
+    def get_next_frame(self, frame_number) -> Optional[VideoFrame]:
+        """Decode the requested frame. Returns VideoFrame or None on end of video.
         """
+        if frame_number == self.current_frame_num:
+            return self.current_frame
+
         try:
-            # Decode frame
-            if True:
-                self.frame_number += speed
-                if self.frame_number < 0:
-                    self.frame_number = 0
-                try:
-                    nvc_frame = self.decoder[self.frame_number]
-                except IndexError:  # EOF?
-                    if loop and self.frame_number:
-                        self.frame_number = 0
-                        nvc_frame         = self.decoder[self.frame_number] # If we get another IndexError here, something's very wrong
-                    else:
-                        return None
-            else:
-                frames = self.decoder.get_batch_frames(1)
-                if not frames:  # Empty list on EOF
-                    return None
-                nvc_frame = frames[0]
-            
+            try:
+                nvc_frame = self.decoder[frame_number]
+            except IndexError:  # EOF?
+                return None
+        
             # Extract frame properties
             shape   = nvc_frame.shape
             strides = nvc_frame.strides
@@ -84,13 +71,16 @@ class NvideoDecoder(VideoDecoder):
             width   = shape[1]
             pitch   = strides[0] if strides else width * 3
             
-            return NvideoFrame(
+            self.current_frame = NvideoFrame(
                 _nvc_frame=nvc_frame,
                 width=width,
                 height=height,
                 pitch=pitch,
                 on_gpu=not self.use_cpu
             )
+            self.current_frame_num = frame_number
+
+            return self.current_frame
             
         except Exception as e:
             print(f"Decode error: {type(e).__name__}: {e}")

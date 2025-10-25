@@ -165,14 +165,9 @@ class OpenXRDevice(object):
             images = xr.enumerate_swapchain_images(swapchain, xr.SwapchainImageOpenGLKHR)
             self.swapchain_images[eye] = [img.image for img in images]
 
-        # Begin session
-        # NOTE: We don't call begin_session here anymore - we wait for READY event
-        # xr.begin_session(
-        #     self.session,
-        #     xr.SessionBeginInfo(
-        #         primary_view_configuration_type=self.view_config_type
-        #     )
-        # )
+        # Setup the controllers:
+        self.init_controllers()
+
         print("DEBUG: Session created, waiting for READY state event...")
 
         # Return details for downstream configuration
@@ -308,7 +303,8 @@ class OpenXRDevice(object):
             'predicted_display_time': self.frame_state.predicted_display_time,
             'left_index': self.swapchain_indices['left'],
             'right_index': self.swapchain_indices['right'],
-            'views': views
+            'views': views,
+            'controllers': self.get_controllers()
         }
 
     def end_frame(self):
@@ -407,4 +403,207 @@ class OpenXRDevice(object):
 
         if self.instance:
             xr.destroy_instance(self.instance)
+
+    #============ Controller related stuff below here =============
+
+    def init_controllers(self):
+
+        self.action_specs = {
+            "grip_pose" : xr.ActionType.POSE_INPUT,
+            "trigger"   : xr.ActionType.FLOAT_INPUT,
+            "squeeze"   : xr.ActionType.FLOAT_INPUT,
+            "thumbstick": xr.ActionType.VECTOR2F_INPUT,
+            "a_button"  : xr.ActionType.BOOLEAN_INPUT,
+            "b_button"  : xr.ActionType.BOOLEAN_INPUT,
+            "x_button"  : xr.ActionType.BOOLEAN_INPUT,
+            "y_button"  : xr.ActionType.BOOLEAN_INPUT,
+        }
+
+        binding_specs = {
+            "grip_pose" : "grip/pose",
+            "trigger"   : "trigger/value",
+            "squeeze"   : "squeeze/value",
+            "thumbstick": "thumbstick",
+        }
+
+        # Hand-specific button bindings
+        button_bindings = {
+            "right": {
+                "a_button": "a/click",
+                "b_button": "b/click",
+            },
+            "left": {
+                "x_button": "x/click",
+                "y_button": "y/click",
+            }
+        }
+
+        self.action_set = xr.create_action_set(
+            self.instance, 
+            xr.ActionSetCreateInfo(
+                action_set_name           = "gameplay",
+                localized_action_set_name = "Gameplay",
+                priority                  = 0
+            )
+        )
+
+        self.hands      = ["left", "right"]
+        self.hand_paths = {hand: xr.string_to_path(self.instance, f"/user/hand/{hand}") for hand in self.hands}
+        hand_paths_list = list(self.hand_paths.values())
+
+        self.actions = {
+            name: xr.create_action(
+                self.action_set,
+                xr.ActionCreateInfo(
+                    action_name           = name,
+                    action_type           = action_type,
+                    subaction_paths       = hand_paths_list,
+                    localized_action_name = name.replace("_", " ").title()
+                )
+            )
+            for name, action_type in self.action_specs.items()
+        }
+
+        interaction_profile = xr.string_to_path(self.instance, "/interaction_profiles/oculus/touch_controller")
+
+        suggested_bindings = [
+            xr.ActionSuggestedBinding(
+                action=self.actions[action_name],
+                binding=xr.string_to_path(self.instance, f"/user/hand/{hand}/input/{binding_path}")
+            )
+            for action_name, binding_path in binding_specs.items()
+            for hand in self.hands
+        ] + [
+            xr.ActionSuggestedBinding(
+                action=self.actions[button_name],
+                binding=xr.string_to_path(self.instance, f"/user/hand/{hand}/input/{binding_path}")
+            )
+            for hand, buttons in button_bindings.items()
+            for button_name, binding_path in buttons.items()
+        ]
+
+        xr.suggest_interaction_profile_bindings(
+            self.instance,
+            xr.InteractionProfileSuggestedBinding(
+                interaction_profile = interaction_profile,
+                suggested_bindings  = suggested_bindings
+            )
+        )
+
+        # Attach action set to session
+        xr.attach_session_action_sets(
+            self.session,
+            xr.SessionActionSetsAttachInfo(
+                action_sets=[self.action_set]
+            )
+        )
+
+        # Create action spaces for pose tracking
+        self.grip_spaces = {
+            hand: xr.create_action_space(
+                self.session,
+                xr.ActionSpaceCreateInfo(
+                    action=self.actions["grip_pose"],
+                    subaction_path=self.hand_paths[hand]
+                )
+            )
+            for hand in self.hands
+        }
+
+        # Map action types to getter functions
+        self.action_getters = {
+            xr.ActionType.FLOAT_INPUT   : xr.get_action_state_float,
+            xr.ActionType.BOOLEAN_INPUT : xr.get_action_state_boolean,
+            xr.ActionType.VECTOR2F_INPUT: xr.get_action_state_vector2f,
+        }
+
+    def get_controllers(self):
+        """Must be called with valid self.frame_state (so between begin and end frame).
+
+        Example pretty print of return value (here with left buttons all pressed
+            and stick pressed down and left, and right controller left alone):
+
+            {'left': {'a_button': None,
+                      'b_button': None,
+                      'grip_pose': {'orientation': (0.5574334263801575,
+                                                    -0.12656213343143463,
+                                                    -0.31022343039512634,
+                                                    0.7596127390861511),
+                                    'position': (-0.0639796257019043,
+                                                 0.7555080652236938,
+                                                 -0.11990729719400406)},
+                      'squeeze': 1.0,
+                      'thumbstick': (-0.43317973613739014, -0.9013031721115112),
+                      'trigger': 1.0,
+                      'x_button': 1,
+                      'y_button': 1},
+             'right': {'a_button': 0,
+                       'b_button': 0,
+                       'grip_pose': {'orientation': (-0.08653908967971802,
+                                                     0.2893432676792145,
+                                                     -0.5636680126190186,
+                                                     -0.7688106298446655),
+                                     'position': (0.5041968822479248,
+                                                  0.7592325806617737,
+                                                  -0.10087166726589203)},
+                       'squeeze': 0.0,
+                       'thumbstick': (0.0, 0.0),
+                       'trigger': 0.0,
+                       'x_button': None,
+                       'y_button': None}}
+        """
+
+        xr.sync_actions(
+            self.session,
+            xr.ActionsSyncInfo(
+                active_action_sets=[xr.ActiveActionSet(action_set=self.action_set)]
+            )
+        )
+
+        # Read all controller states
+        controller_states = {}
+
+        for hand in self.hands:
+            controller_states[hand] = {}
+
+            # Read all actions
+            for action_name, action_type in self.action_specs.items():
+                if action_type == xr.ActionType.POSE_INPUT:
+                    # Handle poses separately
+                    pose = xr.locate_space(
+                        space      = self.grip_spaces[hand],
+                        base_space = self.space,
+                        time       = self.frame_state.predicted_display_time
+                    )
+                    if pose.location_flags & xr.SpaceLocationFlags.POSITION_VALID_BIT:
+                        controller_states[hand][action_name] = {
+                            "position"   : (pose.pose.position.x, pose.pose.position.y, pose.pose.position.z),
+                            "orientation": (pose.pose.orientation.x, pose.pose.orientation.y, 
+                                            pose.pose.orientation.z, pose.pose.orientation.w)
+                        }
+                    else:
+                        controller_states[hand][action_name] = None
+                else:
+                    # Use the appropriate getter for this action type
+                    getter = self.action_getters[action_type]
+                    state  = getter(
+                        self.session,
+                        xr.ActionStateGetInfo(
+                            action         = self.actions[action_name],
+                            subaction_path = self.hand_paths[hand]
+                        )
+                    )
+
+                    # Extract the actual value based on type
+                    if action_type == xr.ActionType.VECTOR2F_INPUT:
+                        controller_states[hand][action_name] = (
+                            state.current_state.x, 
+                            state.current_state.y
+                        ) if state.is_active else None
+                    else:
+                        controller_states[hand][action_name] = (
+                            state.current_state if state.is_active else None
+                        )
+
+        return controller_states
 
