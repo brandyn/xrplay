@@ -1,0 +1,285 @@
+#!/usr/bin/python3
+
+import glfw
+import pycuda.driver as cuda
+
+from time          import time, sleep
+from NvideoDecoder import NvideoDecoder
+from GLop          import render_GL_texture_to_window
+
+class VideoPlayer(object):
+
+    def __init__(self, video_path, win_size=None, xr_mode=False, gpu_id=0):
+        """Creates a video player.
+
+        If win_size is None, only a help window will come up (to capture keyboard
+            and mouse events).  Otherwise the video will be played in a window of
+            at most that size.  win_size may be 'fullscreen' to open a full screen
+            window (for now on the primary monitor).
+
+        Because this relies on extensive global context, there can be only one VideoPlayer.
+        """
+        self.video_path  = video_path
+        self.cuda_ctx    = None
+        self.close_stack = []           # This accumulates items to .close() later (in reverse order)
+
+        if not glfw.init():
+            raise Exception("GLFW init failed")
+
+        try:
+            #
+            # Initialize CUDA
+            #
+            cuda.init()
+            self.cuda_ctx = cuda.Device(gpu_id).retain_primary_context()
+            self.cuda_ctx.push()
+
+            #
+            # Open the video with the decoder (and register it to be closed at shutdown)
+            #
+            self.source = self.closable(NvideoDecoder(video_path, gpu_id, use_cpu=False))
+
+            print(f"Video   : {self.source.width}x{self.source.height} @ {self.source.framerate:.2f} fps")
+            print(f"Duration: {self.source.duration:.2f} seconds ({self.source.frame_count} frames)")
+
+            #
+            # Calculate the window size:
+            #
+            if win_size is None:
+                win_width  = 640    # TBD -- big enough to print the help page.
+                win_height = 480
+                monitor    = None
+            elif win_size == 'fullscreen':
+                monitor    = glfw.get_primary_monitor()
+                mode       = glfw.get_video_mode(monitor)
+                win_width  = mode.size.width
+                win_height = mode.size.height
+            else:
+                monitor    = None
+                win_width, win_height = self.calc_win_size((self.source.width, self.source.height), win_size)
+            print(f"Window  : {win_width}x{win_height}")
+     
+            #
+            # Create the GL window and make it the global rendering target:
+            #
+            self.window = glfw.create_window(win_width, win_height, "Cuda Play", monitor, None)
+            if not self.window:
+                raise Exception("Window creation failed")
+            glfw.make_context_current(self.window)
+            glfw.swap_interval(1)
+
+            #
+            # Now set up the rendering pipeline(s).
+            #
+            # These booleans just tell us which pipelines are active.
+            # We could, I suppose, make a pipeline class which consumes
+            #  frames and then just populate a pipelines list with the
+            #  active pipelines, but for the moment there are so few...
+            #
+            self.p_cuda_texture_window = win_size is not None
+            self.p_cuda_xr             = xr_mode
+
+            if self.p_cuda_texture_window:
+                from CUDAToGLTexture import CUDAToGLTexture
+                self.cuda_to_GL_texture = self.closable(CUDAToGLTexture(self.source.width, self.source.height, init=True))
+
+            if self.p_cuda_xr:
+                print("Initializing OpenXR")
+                from OpenXRDevice import OpenXRDevice
+                from CUDAToOpenXR import CUDAToOpenXR
+
+                self.xr_device = self.closable(OpenXRDevice(app_name="Cuda Play"))
+                xr_info        = self.xr_device.init()
+                xr_size        = xr_info['size']
+                print(f"VR Display: {xr_size[0]}x{xr_size[1]} per eye")
+
+                # Create CUDA → OpenXR mapper
+                self.cuda_to_xr = self.closable(CUDAToOpenXR(
+                    input_size       = (self.source.width, self.source.height),
+                    output_size      = xr_size,
+                    swapchain_images = xr_info['swapchain_images']))
+
+            #
+            # Establish the frame rate:
+            #
+            self.frame_time      = 1.0 / (self.source.framerate if self.source.framerate > 0 else 30.0)
+            self.last_frame_time = time()
+
+        except:
+            self.close()
+            raise
+
+    def calc_win_size(self, source_size, max_size):
+        """Returns the size of the largest window matching source_size's aspect
+            ratio which is not bigger than either source_size or max_size in either dimension.
+        """
+        source_width, source_height = source_size
+        max_width   , max_height    = max_size
+
+        if source_width > max_width or source_height > max_height:
+            aspect = source_width / source_height
+            if aspect > max_width / max_height:
+                width  = max_width
+                height = int(max_width / aspect)
+            else:
+                height = max_height
+                width  = int(max_height * aspect)
+        else:
+            width  = source_width
+            height = source_height
+
+        return width, height
+
+    def run(self):
+        """Main playback loop."""
+        print("Playing... Press Q to quit")
+
+        try:
+            while not glfw.window_should_close(self.window):
+
+                #
+                # Decode next frame
+                #
+                frame = self.source.get_next_frame()
+
+                if frame is None:
+                    print("End of video")
+                    break
+                
+                #
+                # Render the frame through the active pipelines:
+                #
+                # CUDA-resident video frame -> GL texture -> onscreen window:
+                if self.p_cuda_texture_window:
+
+                    if not frame.on_gpu:
+                        raise ValueError("CUDAToGLTexture requires GPU frame")
+
+                    self.cuda_to_GL_texture.invoke(frame.get_data(), frame.pitch)   # frame -> texture
+                    render_GL_texture_to_window(self.cuda_to_GL_texture.texture)    # texture -> window
+
+                # CUDA-resident video frame -> OpenXR swapchain
+                if self.p_cuda_xr:
+
+                    # Poll for OpenXR events (CRITICAL!)
+                    if not self.xr_device.poll_events():
+                        print("Session ended")
+                        break
+
+                    # Begin XR frame
+                    frame_info = self.xr_device.begin_frame()
+
+                    #
+                    # TODO: Currently if the headset is taken off, this will keep decoding
+                    #  the video, which is reasonable if there is also a window up on the
+                    #  screen, but if there isn't then should we automatically "pause" the
+                    #  video decoding?
+                    #
+                    if frame_info['should_render']:
+
+                        if not frame.on_gpu:
+                            raise ValueError("GPU frame required")
+
+                        # Render the cuda image directly to the active swapchain images:
+                        self.cuda_to_xr.invoke(
+                            frame.get_data(),
+                            frame.pitch,
+                            frame_info['left_index'],
+                            frame_info['right_index'],
+                            frame_info['views'],
+                        )
+
+                    #
+                    # Submit frame to compositor.  We could wait until the frame time
+                    #  below, but minimizing latency takes priority over exact video
+                    #  frame timing in XR:
+                    #
+                    self.xr_device.end_frame()
+
+                #
+                # Wait until it's time to display this frame (swap buffers):
+                #
+                next_frame_time = self.last_frame_time + self.frame_time
+                now             = time()
+                sleep_time      = next_frame_time - now
+
+                if sleep_time > 0:
+                    sleep(sleep_time)
+                    self.last_frame_time += self.frame_time
+                else:
+                    self.last_frame_time = now
+
+                #
+                # Push the rendered frame out now that it's time:
+                #
+                if self.p_cuda_texture_window:
+                    glfw.swap_buffers(self.window)
+ 
+                #
+                # UI / Check for exit
+                #
+                glfw.poll_events()
+                if glfw.get_key(self.window, glfw.KEY_Q) == glfw.PRESS:
+                    break
+
+        finally: 
+            self.close()
+
+    def closable(self, ob):
+        """This just registers a newly created ob to be .close()'d at shutdown time.
+        """
+        self.close_stack.append(ob)
+        return ob
+
+    def close(self):
+        """Clean up resources.
+        """
+        while self.close_stack:
+            print(f"Closing {type(self.close_stack[-1]).__name__}")
+            self.close_stack.pop().close()
+
+        if self.cuda_ctx is not None:
+            print("Closing CUDA")
+            self.cuda_ctx.pop()
+
+        print("Closing GL")
+        glfw.terminate()
+
+
+if __name__ == "__main__":
+
+    import sys
+    name = sys.argv[0].split('/')[-1]
+
+    help_string = f"""Usage: {name} -play [-h(elp)] [-s(ize) max_width,max_height] [-xr (toggle xr mode)] [-f(ull screen)] <video_file>
+"""
+
+    video_path = None
+    xr_mode    = name.lower()[:2] in ('xr', 'vr')  # E.g., so naming the script xr-play or xrv or whatever makes it play in XR mode by default.
+    max_size   = None if xr_mode else (1920, 1080)
+
+    args = sys.argv[1:]
+    while args:
+        arg = args.pop(0)
+        if arg.startswith('-'):
+            if arg == '-s':
+                max_size = tuple(int(s) for s in args.pop(0).split(','))
+            elif arg == '-f':
+                max_size = 'fullscreen'
+            elif arg == '-xr':
+                xr_mode = not xr_mode
+            elif arg in ('-h', '--help'):
+                print(help_string)
+                exit(0)
+        elif video_path is None:
+            video_path = arg
+        else:
+            print(help_string)
+            exit(1)
+
+    if video_path is None:
+        print(help_string)
+        exit(1)
+
+    VideoPlayer(video_path, max_size, xr_mode).run()
+
