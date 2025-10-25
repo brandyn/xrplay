@@ -2,12 +2,13 @@
 
 XRPlay is, for the moment, a proof-of-concept for a high-performance, command-line video player written in Python, leveraging NVIDIA CUDA for fast video decoding and OpenXR for optional VR headset support.
 
-I've tried to keep it as simple and modular as possible, without sacrificing speed.
+I've tried to keep it as simple and modular as possible, without sacrificing speed.  As of the first release, it's only 1300 lines including comments, covering two distinct rendering pipelines (ordinary video, and VR SBS 180).
 
 It achieves smooth playback of high-resolution 180 SBS VR videos (e.g., 6Kx3K@60fps to a Quest 3 via WiVRn without breaking a sweat) which other OpenXR players I found couldn't keep up with.
 
 Currently, it supports video playback only (no audio, and no play controls yet) and requires an NVIDIA GPU.
-The only VR video format supported right now is 180 SBS, but it would be pretty easy to add others.
+The only VR video format supported right now is 180 SBS, but it would be pretty easy to add others.  It
+will also play ordinary videos to the desktop just fine (still no audio though).
 
 ### System Dependencies
 1. **NVIDIA CUDA Toolkit**: Install from [NVIDIA’s website](https://developer.nvidia.com/cuda-downloads).
@@ -57,9 +58,9 @@ Run xrplay or cuda-play (same script, different name, slightly different default
 
 ## Performance
 XRPlay is optimized for speed:
-- Achieves 6Kx3K@60fps playback on a Quest 3 via WiVRn, outperforming other XR players I tried.
+- Easily achieves 6Kx3K@60fps playback on a Quest 3 via WiVRn, outperforming other XR players I tried.
 - Uses a single CUDA kernel pass for VR rendering, avoiding extra image copies.
-- "Pure" Python (with embedded CUDA kernel) for clean, maintainable code.
+- "Pure" Python (with embedded CUDA kernel) for clean, maintainable code.  All the heavy lifting is done by the GPU, and python just holds the pieces together.
 
 ## Requirements
 - **Python**: 3.8+
@@ -68,8 +69,8 @@ XRPlay is optimized for speed:
 - **OS**: Tested on Linux; Windows will need some tweaks.
 
 ## Notes
-- **Windows Users**: The `xrplay` symlink may not work. Run `python src/cuda-play video.mp4` instead. Ensure CUDA Toolkit and OpenGL drivers are installed.
-- **Contributing**: Audio support and play controls are planned. Contributions welcome! See issues for tasks.
+- **Windows Users**: I haven't tried it on Windows.  It will require a few tweaks, and I'm not sure how to get/compile pycuda with GL support.
+- **Contributing**: Audio support and play controls are planned. Contributions welcome!
 - **Limitations**: Requires NVIDIA GPU. Non-CUDA support is theoretically possible but not implemented.
 
 ## License
