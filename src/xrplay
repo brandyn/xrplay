@@ -140,10 +140,12 @@ class VideoPlayer(object):
             render_help()
             glfw.swap_buffers(self.window)
 
-        paused       = False
-        speed        = 1
-        frame_number = -1
-        loop         = True
+        A = B = X = Y    = False    # Button state tracking for transition event detection.
+        paused           = False
+        speed            = 1
+        frame_number     = -1
+        loop             = True
+        pitch_adjustment = 0
 
         try:
             while not glfw.window_should_close(self.window):
@@ -244,6 +246,7 @@ class VideoPlayer(object):
                             frame_info['left_index'],
                             frame_info['right_index'],
                             frame_info['views'],
+                            pitch_adjustment,
                         )
 
                     #
@@ -283,11 +286,24 @@ class VideoPlayer(object):
                     break
 
                 if controllers:
-                    if controllers.get('right', {}).get('b_button'):
+
+                    left  = controllers.get( 'left', {})
+                    right = controllers.get('right', {})
+
+                    if right.get('b_button'):
                         break
 
-                if controllers:
-                    paused = controllers.get('right', {}).get('a_button')
+                    # down-click event on A button toggles pause:
+                    A_ = right.get('a_button')
+                    if A_ and not A:
+                        paused = not paused
+                    A = A_
+
+                    if paused:
+                        if right.get('thumbstick_click'):
+                            pitch_adjustment = 0
+                        else:
+                            pitch_adjustment += (right.get('thumbstick') or (0,0))[1]*0.01
 
                 if glfw.get_key(self.window, glfw.KEY_RIGHT)  == glfw.PRESS:
                     speed = 10
@@ -298,9 +314,15 @@ class VideoPlayer(object):
                 elif glfw.get_key(self.window, glfw.KEY_DOWN) == glfw.PRESS:
                     speed = -100
                 elif controllers:
-                    stick = controllers.get('right', {}).get('thumbstick', (0.0, 0.0))[0]
-                    #print(stick)
-                    speed = 10**stick
+                    if not paused:
+                        if right.get('thumbstick_click'):
+                            speed = 1
+                        else:
+                            speed *= 1.01 ** (right.get('thumbstick') or (0.0, 0.0))[0]
+                            if speed < 0.01:
+                                speed = 0.01
+                            elif speed > 100:
+                                speed = 100
                 else:
                     speed = 1
 

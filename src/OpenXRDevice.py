@@ -409,21 +409,23 @@ class OpenXRDevice(object):
     def init_controllers(self):
 
         self.action_specs = {
-            "grip_pose" : xr.ActionType.POSE_INPUT,
-            "trigger"   : xr.ActionType.FLOAT_INPUT,
-            "squeeze"   : xr.ActionType.FLOAT_INPUT,
-            "thumbstick": xr.ActionType.VECTOR2F_INPUT,
-            "a_button"  : xr.ActionType.BOOLEAN_INPUT,
-            "b_button"  : xr.ActionType.BOOLEAN_INPUT,
-            "x_button"  : xr.ActionType.BOOLEAN_INPUT,
-            "y_button"  : xr.ActionType.BOOLEAN_INPUT,
+            "grip_pose"       : xr.ActionType.POSE_INPUT,
+            "trigger"         : xr.ActionType.FLOAT_INPUT,
+            "squeeze"         : xr.ActionType.FLOAT_INPUT,
+            "thumbstick"      : xr.ActionType.VECTOR2F_INPUT,
+            "thumbstick_click": xr.ActionType.BOOLEAN_INPUT,
+            "a_button"        : xr.ActionType.BOOLEAN_INPUT,
+            "b_button"        : xr.ActionType.BOOLEAN_INPUT,
+            "x_button"        : xr.ActionType.BOOLEAN_INPUT,
+            "y_button"        : xr.ActionType.BOOLEAN_INPUT,
         }
 
         binding_specs = {
-            "grip_pose" : "grip/pose",
-            "trigger"   : "trigger/value",
-            "squeeze"   : "squeeze/value",
-            "thumbstick": "thumbstick",
+            "grip_pose"       : "grip/pose",
+            "trigger"         : "trigger/value",
+            "squeeze"         : "squeeze/value",
+            "thumbstick"      : "thumbstick",
+            "thumbstick_click": "thumbstick/click",
         }
 
         # Hand-specific button bindings

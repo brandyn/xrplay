@@ -225,7 +225,7 @@ class CUDAToOpenXR:
                 )
                 self.cuda_swapchains[eye].append(registered)
     
-    def invoke(self, cuda_ptr, pitch, left_index, right_index, views=None):
+    def invoke(self, cuda_ptr, pitch, left_index, right_index, views=None, leveling_offset=0):
         """
         Render from cuda memory straight to output GL texture (swapchain image)
             with the currently selected kernel (e.g., 180 SBS), using view
@@ -238,6 +238,7 @@ class CUDAToOpenXR:
             right_index: Right eye swapchain image index
             views: render orientation for each view --
                     list of 2 view (usually xr.View) objects with .pose and .fov
+            leveling_offset: radians of rotational pitch adjustment.  Positive tilts scene down.
         """
         if views is None or len(views) < 2:
             raise ValueError("180 SBS rendering requires 2 views")
@@ -251,6 +252,22 @@ class CUDAToOpenXR:
             # Extract rotation matrix from quaternion and convert to rotation matrix (3x3)
             quat       = view.pose.orientation
             rot_matrix = self._quat_to_matrix(quat.x, quat.y, quat.z, quat.w)
+
+            # Apply pitch leveling offset, if applicable
+            if leveling_offset:
+
+                cos_p = np.cos(leveling_offset)
+                sin_p = np.sin(leveling_offset)
+                
+                # Rotation matrix for pitch (rotation around X-axis)
+                pitch_matrix = np.array([
+                    [1,     0,      0],
+                    [0, cos_p, -sin_p],
+                    [0, sin_p,  cos_p]
+                ])
+                
+                # Combine rotations: first apply the head rotation, then the pitch offset
+                rot_matrix = pitch_matrix @ rot_matrix
 
             # Map the swapchain image
             mapping = registered_image.map(self.cuda_stream)
@@ -332,11 +349,11 @@ class CUDAToOpenXR:
     
     def _quat_to_matrix(self, x, y, z, w):
         """Convert quaternion to 3x3 rotation matrix (row-major)."""
-        return [
-            1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y),
-                2*(x*y + w*z), 1 - 2*(x*x + z*z),     2*(y*z - w*x),
-                2*(x*z - w*y),     2*(y*z + w*x), 1 - 2*(x*x + y*y)
-        ]
+        return np.array([
+           [1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y)],
+           [    2*(x*y + w*z), 1 - 2*(x*x + z*z),     2*(y*z - w*x)],
+           [    2*(x*z - w*y),     2*(y*z + w*x), 1 - 2*(x*x + y*y)]
+        ])
 
     def close(self):
         """Unregister all CUDA resources."""
