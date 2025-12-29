@@ -1,6 +1,6 @@
 # XRPlay: Python/CUDA Video Player with OpenXR Support
 
-XRPlay is a proof-of-concept, high-performance, command-line video player for desktop and VR, written entirely in Python (plus some Cuda kernels).
+XRPlay is a proof-of-concept (still *very* rudimentary UI), high-performance, command-line video player for desktop and VR, written entirely in Python (plus some Cuda kernels).
 
 It leverages NVIDIA CUDA and Cupy for fast video decoding and OpenXR for optional VR headset support.  Currently it requires an NVIDIA GPU, but future AMD support is theoretically possible (especially if Cupy supports it).
 
@@ -47,14 +47,15 @@ VR rendering goes from the video decode buffer to the OpenXR swapchain image via
 ## Usage
 Run xrplay or vplay (same script, different name, slightly different default behavior) from the command line:
 ```bash
-vplay video.mp4       # Desktop playback
-vplay video.mp4 -a    # Desktop playback with audio (pre-loads entire audio stream into memory)
-xrplay video.mp4 -a   # VR playback (180° SBS) with audio
-vplay -s 1920,1080    # Desktop with max width,height
-vplay -f              # Full-screen desktop playback
-vplay -xr video.mp4   # Desktop and VR playback at the same time
-xrplay video.mp4 -f   # Fullscreen desktop and VR playback at the same time
-xrplay -h             # Show help
+vplay video.mp4         # Desktop playback
+vplay video.mp4 -a      # Desktop playback with audio (pre-loads entire audio stream into memory)
+vplay video.mp4 -p 190  # Desktop playback of a VR 190-degree SBS video (no view angle controls yet)
+xrplay video.mp4 -a     # VR playback (180° SBS) with audio
+vplay -s 1920,1080      # Desktop with max width,height
+vplay -f                # Full-screen desktop playback
+vplay -xr video.mp4     # Desktop and VR playback at the same time
+xrplay video.mp4 -f     # Fullscreen desktop and VR playback at the same time
+xrplay -h               # Show help
 ```
 
 - **Controls**: Press `q` to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.
