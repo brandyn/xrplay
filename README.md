@@ -1,14 +1,12 @@
 # XRPlay: Python/CUDA Video Player with OpenXR Support
 
-XRPlay is, for the moment, a proof-of-concept for a high-performance, command-line video player written in Python, leveraging NVIDIA CUDA for fast video decoding and OpenXR for optional VR headset support.
+XRPlay is a proof-of-concept, high-performance, command-line video player for desktop and VR, written entirely in Python (plus some Cuda kernels).
 
-I've tried to keep it as simple and modular as possible, without sacrificing speed.  As of the first release, it's only about 1300 lines including comments, covering two distinct rendering pipelines (ordinary video, and VR SBS 180).
+It leverages NVIDIA CUDA and Cupy for fast video decoding and OpenXR for optional VR headset support.  Currently it requires an NVIDIA GPU, but future AMD support is theoretically possible (especially if Cupy supports it).
 
-It achieves smooth playback, with head tracking, of high-resolution 180 SBS VR videos (e.g., 6Kx3K@60fps to a Quest 3 via WiVRn without breaking a sweat) which other OpenXR players I found couldn't keep up with.
+I've tried to keep it as simple and modular as possible, without sacrificing speed.  As of the second release, it's only about 4000 lines including comments, covering two distinct rendering pipelines (ordinary video, and VR), multiple VR projections (SBS, Top-Bottom, Fisheye, all at 180, 360, or arbitrary), and audio (hacked but works).
 
-Currently, it supports video playback only (no audio, and no play controls yet) and requires an NVIDIA GPU.
-The only VR video format supported right now is 180 SBS, but it would be pretty easy to add others.  It
-will also play ordinary videos to the desktop just fine (still no audio though).
+VR rendering goes from the video decode buffer to the OpenXR swapchain image via a single Cuda kernel--no needless frame copies.  It achieves smooth playback, with head tracking, of high-resolution 180 SBS VR videos (e.g., 6Kx3K@60fps to a Quest 3 via WiVRn without breaking a sweat) which other OpenXR players I found, even though written in faster languages, couldn't keep up with.
 
 ### System Dependencies
 - **Hardware**: NVIDIA GPU (required for CUDA).
@@ -17,7 +15,7 @@ will also play ordinary videos to the desktop just fine (still no audio though).
 - **FFmpeg**: Required for video demuxing (install via system package manager, e.g., `sudo apt install ffmpeg` on Ubuntu).
 - **Python**: 3.8+
 - **OS**: Tested on Linux; Windows will need some tweaks.
-- **VR**: OpenXR-compatible headset (e.g., Quest 3, optional).
+- **VR**: OpenXR-compatible headset (e.g., Quest 3 via Wivrn, optional).
 
 ### Intalling
 1. Clone the repo:
@@ -44,25 +42,26 @@ will also play ordinary videos to the desktop just fine (still no audio though).
    - `PyNvVideoCodec>=2.0.2`
    - `PyOpenGL>=3.1.10`
    - `pyopenxr>=1.1.5201`
+   - `pyaudio>=0.2.13`
 
 ## Usage
-Run xrplay or cuda-play (same script, different name, slightly different default behavior) from the command line:
+Run xrplay or vplay (same script, different name, slightly different default behavior) from the command line:
 ```bash
-cuda-play video.mp4       # Desktop playback
-xrplay video.mp4          # VR playback (180° SBS)
-cuda-play -s 1920,1080    # Desktop with max width,height
-cuda-play -f              # Full-screen desktop playback
-cuda-play -xr video.mp4   # Desktop and VR playback at the same time
-xrplay video.mp4 -f       # Fullscreen desktop and VR playback at the same time
-xrplay -h                 # Show help
+vplay video.mp4       # Desktop playback
+vplay video.mp4 -a    # Desktop playback with audio (pre-loads entire audio stream into memory)
+xrplay video.mp4 -a   # VR playback (180° SBS) with audio
+vplay -s 1920,1080    # Desktop with max width,height
+vplay -f              # Full-screen desktop playback
+vplay -xr video.mp4   # Desktop and VR playback at the same time
+xrplay video.mp4 -f   # Fullscreen desktop and VR playback at the same time
+xrplay -h             # Show help
 ```
 
-- **Controls**: Press `q` to quit. Future updates will add pause, jump, and OpenXR controller support.
-- **Note**: No audio support yet (planned).
+- **Controls**: Press `q` to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
-Built with [pyopenxr](https://github.com/cmbruns/pyopenxr), [pycuda](https://github.com/inducer/pycuda), and [PyNvVideoCodec](https://github.com/NVIDIA/PyNvVideoCodec).
+Built with [pyopenxr](https://github.com/cmbruns/pyopenxr), [pycuda](https://github.com/inducer/pycuda), [cupy](https://cupy.dev/), and [PyNvVideoCodec](https://github.com/NVIDIA/PyNvVideoCodec).
 

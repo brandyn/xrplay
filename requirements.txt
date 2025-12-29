@@ -4,4 +4,4 @@ pycuda>=2025.1.2
 PyNvVideoCodec>=2.0.2
 PyOpenGL>=3.1.10
 pyopenxr>=1.1.5201
-pillow>=10.2.0
+pyaudio>=0.2.13

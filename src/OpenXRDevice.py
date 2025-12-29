@@ -168,7 +168,7 @@ class OpenXRDevice(object):
         # Setup the controllers:
         self.init_controllers()
 
-        print("DEBUG: Session created, waiting for READY state event...")
+        #print("DEBUG: Session created, waiting for READY state event...")
 
         # Return details for downstream configuration
         view_config = self.view_configs[0]  # Both eyes same resolution
@@ -204,10 +204,10 @@ class OpenXRDevice(object):
                     ).contents
 
                     self.session_state = event.state
-                    print(f"DEBUG: Session state changed to {self.session_state}")
+                    #print(f"DEBUG: Session state changed to {self.session_state}")
 
                     if event.state == xr.SessionState.READY:
-                        print("DEBUG: Session READY - beginning session")
+                        #print("DEBUG: Session READY - beginning session")
                         xr.begin_session(
                             self.session,
                             xr.SessionBeginInfo(
@@ -217,20 +217,20 @@ class OpenXRDevice(object):
                         self.session_running = True
 
                     elif event.state == xr.SessionState.STOPPING:
-                        print("DEBUG: Session STOPPING - ending session")
+                        #print("DEBUG: Session STOPPING - ending session")
                         xr.end_session(self.session)
                         self.session_running = False
 
                     elif event.state == xr.SessionState.EXITING:
-                        print("DEBUG: Session EXITING")
+                        #print("DEBUG: Session EXITING")
                         return False
 
                     elif event.state == xr.SessionState.LOSS_PENDING:
-                        print("DEBUG: Session LOSS_PENDING")
+                        #print("DEBUG: Session LOSS_PENDING")
                         return False
 
                 elif event_type == xr.StructureType.EVENT_DATA_INSTANCE_LOSS_PENDING:
-                    print("DEBUG: Instance loss pending")
+                    #print("DEBUG: Instance loss pending")
                     return False
 
             except xr.exception.EventUnavailable:
