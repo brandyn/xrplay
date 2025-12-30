@@ -58,7 +58,7 @@ xrplay video.mp4 -f     # Fullscreen desktop and VR playback at the same time
 xrplay -h               # Show help
 ```
 
-- **Controls**: Press `q` to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.
+- **Controls**: Press `q` to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.  When paused, right stick controls pan/tilt.
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.
