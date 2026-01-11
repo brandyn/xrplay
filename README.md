@@ -1,12 +1,22 @@
 # XRPlay: Python/CUDA Video Player with OpenXR Support
 
-XRPlay is a proof-of-concept (still *very* rudimentary UI), high-performance, command-line video player for desktop and VR, written entirely in Python (plus some Cuda kernels).
+XRPlay is a proof-of-concept, high-performance, command-line video player for desktop and VR, written entirely in Python (plus some Cuda kernels).
 
 It leverages NVIDIA CUDA and Cupy for fast video decoding and OpenXR for optional VR headset support.  Currently it requires an NVIDIA GPU, but future AMD support is theoretically possible (especially if Cupy supports it).
 
-I've tried to keep it as simple and modular as possible, without sacrificing speed.  As of the second release, it's only about 4000 lines including comments, covering two distinct rendering pipelines (ordinary video, and VR), multiple VR projections (SBS, Top-Bottom, Fisheye, all at 180, 360, or arbitrary), and audio (hacked but works).
+I've tried to keep it as simple and modular as possible, without sacrificing speed.
+
+Audio currently works but is a big hack (it pre-loads the entire audio track into memory).
+
+Multiple VR projections are supported (SBS, Top-Bottom, Fisheye, all at 180, 360, or arbitrary).
+
+If you launch it on a folder, it will index the folder (recursively) for videos and bring up a video navigator.  It (simply) expects .jpg files with the same root path as the video file for the thumbnails, which have to be made separately atm.  The navigator works in both desktop and VR modes.  The navigator supports tagging, ratings, filtering and sorting.
 
 VR rendering goes from the video decode buffer to the OpenXR swapchain image via a single Cuda kernel--no needless frame copies.  It achieves smooth playback, with head tracking, of high-resolution 180 SBS VR videos (e.g., 6Kx3K@60fps to a Quest 3 via WiVRn without breaking a sweat) which other OpenXR players I found, even though written in faster languages, couldn't keep up with.
+
+Despite all the features, it was thrown together rather quickly, so expect rough edges:  It's a proof-of-concept...
+
+Ping me if you try it.  As far as I'm aware, nobody has yet.
 
 ### System Dependencies
 - **Hardware**: NVIDIA GPU (required for CUDA).
@@ -43,6 +53,7 @@ VR rendering goes from the video decode buffer to the OpenXR swapchain image via
    - `PyOpenGL>=3.1.10`
    - `pyopenxr>=1.1.5201`
    - `pyaudio>=0.2.13`
+   - `imgui[glfw]==2.0.0`
 
 ## Usage
 Run xrplay or vplay (same script, different name, slightly different default behavior) from the command line:
@@ -58,11 +69,11 @@ xrplay video.mp4 -f     # Fullscreen desktop and VR playback at the same time
 xrplay -h               # Show help
 ```
 
-- **Controls**: Press `q` to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.  When paused, right stick controls pan/tilt.
+- **Controls**: Press escape to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.  When paused, right stick controls pan/tilt.
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
-Built with [pyopenxr](https://github.com/cmbruns/pyopenxr), [pycuda](https://github.com/inducer/pycuda), [cupy](https://cupy.dev/), and [PyNvVideoCodec](https://github.com/NVIDIA/PyNvVideoCodec).
+Built with [pyopenxr](https://github.com/cmbruns/pyopenxr), [pycuda](https://github.com/inducer/pycuda), [cupy](https://cupy.dev/), [PyNvVideoCodec](https://github.com/NVIDIA/PyNvVideoCodec), and [pyimgui](https://github.com/pyimgui/pyimgui).
 

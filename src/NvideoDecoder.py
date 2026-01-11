@@ -1,16 +1,20 @@
 
 import PyNvVideoCodec as nvc
 import cupy           as cp
+import os
 
-from VideoDecoder import VideoDecoder
+from VideoSource import VideoSource
 
-class NvideoDecoder(VideoDecoder):
-    """Minimal, stable API for video decoding. Returns frames in standard format.
-    """
+class NvideoDecoder(VideoSource):
+
     def __init__(self, video_path, gpu_id=0, use_cpu=False):
-        VideoDecoder.__init__(self, video_path)
+        VideoSource.__init__(self)
 
-        self.use_cpu = use_cpu
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file {video_path} not found")
+ 
+        self.video_path = video_path
+        self.use_cpu    = use_cpu
         
         # Initialize decoder
         self.decoder = nvc.SimpleDecoder(
@@ -31,7 +35,7 @@ class NvideoDecoder(VideoDecoder):
         self.current_frame     = None  # reused sometimes when speed < 1
         self.current_frame_num = -1
 
-    def get_frame(self, frame_number):
+    def get_frame(self, frame_number, io=None):
 
         if frame_number == self.current_frame_num:
             return self.current_frame

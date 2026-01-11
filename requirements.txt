@@ -5,3 +5,4 @@ PyNvVideoCodec>=2.0.2
 PyOpenGL>=3.1.10
 pyopenxr>=1.1.5201
 pyaudio>=0.2.13
+imgui==2.0.0

@@ -29,12 +29,12 @@ def load_image_texture():
 
 texture_id = None
 
-def render_help():
+def render_help(window_size):
 
     global texture_id
 
     if texture_id is None:
         texture_id = load_image_texture()
 
-    render_GL_texture_to_window(texture_id)
+    render_GL_texture_to_window(texture_id, window_size)
 

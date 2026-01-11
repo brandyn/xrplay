@@ -17,11 +17,13 @@ class CupyToOpenXR:
       - invoke(image, left_index, right_index, views)
             where *_index says which output image in each swapchain to use.
     """
-    def __init__(self, projector, swapchain_images=None):
+    def __init__(self, output_size, projector, swapchain_images=None):
         """projector is a CupyToGLTexture mapper supporting invoke_vr()
         swapchain_images must be passed here or provided later to .init()
         """
+        self.output_size     = output_size  # Per eye
         self.projector       = projector
+        self.projection      = projector.projection
         self.cuda_swapchains = {'left': [], 'right': []}
 
         if swapchain_images is not None:
@@ -43,7 +45,11 @@ class CupyToOpenXR:
                 registered = self.projector.register_texture(gl_texture)
                 self.cuda_swapchains[eye].append(registered)
     
-    def invoke(self, image, left_index, right_index, views=None, leveling_offset=0, yaw_offset=0):
+    def set_projection(self, projection):
+        self.projector.set_projection(projection)
+        self.projection = projection
+
+    def invoke(self, image, left_index, right_index, views=None, leveling_offset=0, yaw_offset=0, screen_distance=3.0, aspect_ratio=16/9):
         """
         Render from cuda memory straight to output GL texture (swapchain image)
             with the currently selected kernel (e.g., 180 SBS), using view
@@ -69,12 +75,41 @@ class CupyToOpenXR:
             self.projector.invoke_vr(
                     src_image       = image,
                     dst_image       = self.cuda_swapchains[eye_name][swapchain_index],
+                    dst_size        = self.output_size,
                     rot_matrix      = rot_matrix,
                     fov             = view.fov,
                     leveling_offset = leveling_offset,
                     yaw_offset      = yaw_offset,
-                    eye             = eye_idx
+                    screen_distance = screen_distance,
+                    screen_height   = 2.5,
+                    screen_width    = 2.5 * aspect_ratio,
+                    eye             = eye_idx,
                 )
+
+    def project_aim_to_screen(self, aim, leveling_offset=0, yaw_offset=0, screen_width=4.4, screen_height=2.475, screen_distance=3.0):
+        """Project a controller aim pose ray onto the virtual screen.
+        
+        Args:
+            aim: OpenXR pose dict with 'orientation' quaternion (x, y, z, w)
+            rest are same as in invoke() above.
+        
+        Returns:
+            (u, v) in [0, 1] range if ray hits screen, None otherwise.
+            (0, 0) is top-left, (1, 1) is bottom-right.
+        """
+        # Convert quaternion to rotation matrix
+        quat       = aim['orientation']
+        rot_matrix = self._quat_to_matrix(quat[0], quat[1], quat[2], quat[3])
+        
+        # Delegate to projector
+        return self.projector.project_ray_to_screen(
+            rot_matrix      = rot_matrix,
+            leveling_offset = leveling_offset,
+            yaw_offset      = yaw_offset,
+            screen_width    = screen_width,
+            screen_height   = screen_height,
+            screen_distance = screen_distance
+        )
 
     def _quat_to_matrix(self, x, y, z, w):
         """Convert quaternion to 3x3 rotation matrix (row-major)."""

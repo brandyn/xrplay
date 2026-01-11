@@ -1,0 +1,147 @@
+#!/usr/bin/python3
+
+"""
+Standalone test harness for 2D UI plugins.
+
+Edit main() at the bottom of this file to test different plugins.
+
+** AT THE MOMENT this is configured to run the video browser **
+"""
+
+from OpenGL.GL import *
+from math import cos, sin, tau
+from IO_glfw import IO, IO_glfw
+
+class UITestHarness(object):
+    """
+    Generic test harness for UI plugins.
+    Displays plugin output in a GLFW window with mouse interaction.
+    """
+    
+    def __init__(self, plugin, size=(1920, 1080), title="UI Test Harness"):
+        self.plugin = plugin
+        self.io     = IO_glfw()
+        self.title  = title
+        
+        self.io.set_size(size)
+
+    def run(self):
+        """Main loop."""
+
+        print("Press Escape to exit")
+
+        while not self.io.quitted:
+            self.io.poll_events()
+            
+            if 'escape' in self.io.keys_down:
+                self.io.quit()
+
+            # Let plugin render to texture
+            self.plugin.render(self.io)
+
+            # Clear IO accumulators:
+            self.io.clear()
+ 
+            self.io.swap_buffers()
+        
+        self.close()
+    
+    def close(self):
+        """Cleanup resources."""
+        print("Closing test harness...")
+        self.plugin.close()
+        self.io.close()
+
+
+class SimpleUI(object):
+    """
+    Example plugin: draws a circle where mouse is, filled when clicked.
+    Demonstrates the minimal plugin interface.
+    """
+    def __init__(self):
+        pass
+    
+    def render(self, io:IO):
+        """
+        Render UI to target texture.
+        """
+        # Set viewport and clear
+        glViewport(0, 0, *io.size)
+        glClearColor(0.2, 0.2, 0.25, 1.0)
+        glClear(GL_COLOR_BUFFER_BIT)
+        
+        self.io = io    # Our drawing routines need to know the target size
+
+        # Draw circle at mouse position
+        self._draw_circle(io.mouse_x, io.mouse_y, 50, filled=io.mouse_down)
+        
+        # Draw some text-like indicators
+        self._draw_text_placeholder()
+    
+    def _draw_circle(self, cx, cy, radius, filled=False):
+        """Draw a circle using immediate mode (for simplicity)."""
+        # Convert from top-left origin to OpenGL bottom-left origin
+        cy = self.io.size[1] - cy
+        
+        # Convert pixel coords to NDC (-1 to 1)
+        x = (cx / self.io.size[0]) * 2 - 1
+        y = (cy / self.io.size[1]) * 2 - 1
+        r = radius / min(self.io.size)
+        
+        # Draw circle
+        if filled:
+            glBegin(GL_TRIANGLE_FAN)
+        else:
+            glBegin(GL_LINE_LOOP)
+        
+        glColor3f(0.2, 0.8, 0.3)
+        
+        segments = 32
+        for i in range(segments + 1):
+            angle = tau * i / segments
+            glVertex2f(x + r * cos(angle), y + r * sin(angle))
+        
+        glEnd()
+    
+    def _draw_text_placeholder(self):
+        """Draw some visual elements to show the UI is active."""
+        glColor3f(0.8, 0.8, 0.8)
+        glBegin(GL_LINES)
+        # Crosshair
+        glVertex2f(-0.05, 0)
+        glVertex2f(0.05, 0)
+        glVertex2f(0, -0.05)
+        glVertex2f(0, 0.05)
+        glEnd()
+        
+        # Status text area indicator (just a rectangle)
+        glColor3f(0.3, 0.3, 0.35)
+        glBegin(GL_QUADS)
+        glVertex2f(-0.9, 0.9)
+        glVertex2f(0.9, 0.9)
+        glVertex2f(0.9, 0.8)
+        glVertex2f(-0.9, 0.8)
+        glEnd()
+    
+    def close(self):
+        """Cleanup resources."""
+        pass  # Nothing to clean up for this simple example
+
+
+if __name__ == '__main__':
+
+    def main():
+        """Run test harness with example plugin."""
+        
+        # Create plugin
+        if True:
+            from UI2D.VideoBrowser import VideoBrowserPlugin
+            plugin = VideoBrowserPlugin("testdir")#, readonly=True)
+        else:
+            plugin = SimpleUI()
+        
+        # Create and run test harness
+        UITestHarness(plugin, title="Simple UI Test").run()
+
+    main()
+

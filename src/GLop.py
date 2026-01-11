@@ -1,7 +1,10 @@
 
 from OpenGL.GL import *
 
-def render_GL_texture_to_window(texture):
+def render_GL_texture_to_window(texture, window_size):
+
+    glViewport(0, 0, *window_size)
+
     #glClear(GL_COLOR_BUFFER_BIT)   # Needless 100% overdraw.
     glEnable(GL_TEXTURE_2D)
     glBindTexture(GL_TEXTURE_2D, texture)

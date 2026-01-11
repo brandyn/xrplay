@@ -6,79 +6,185 @@ import pycuda.driver as cuda
 from time          import perf_counter as time, sleep
 from NvideoDecoder import NvideoDecoder
 from GLop          import render_GL_texture_to_window
+from IO_glfw       import IO_glfw
 
 import Info
 
+projection_cycle = [
+        'mono',
+        'flat',
+        '180',
+        '360',
+        'F60',
+        'F180',
+        'F190',
+        'F360',
+    ]
+
 class Options(object):
     def __init__(self, app_name):
-        self.video_path = None
+        self.video_path = None  # path to the video being played or None for browser
+        self.root_dir   = None  # Optional root directory for browsing (instead of exiting)
         self.xr_mode    = app_name.lower()[:2] in ('xr', 'vr')  # E.g., so naming the script xr-play or xrv or whatever makes it play in XR mode by default.
-        self.projection = None   # What projection to use.  None = simple blit or resize.
-        self.max_size   = None if self.xr_mode else (1920, 1080)
+        self.projection = None   # What projection to use.  None = default.  See ProjectorVR
+        self.max_size   = None
         self.timers     = None
         self.plugins    = []
-        self.max_speed  = None
-        self.no_delay   = False
+        self.max_speed  = None  # Some modes may need to limit playback speed.  1.0 is normal speed.
+        self.no_delay   = False # No real-time sleep -- play back at maximum possible framerate.  Speed still impacts here, via frame skipping.
         self.loop       = True
         self.audio      = False
+        self.create     = False # Create browser database if missing?
+        self.gpu_id     = 0
+
+# TODO: In theory chromakey transparency is implemented
+#    but I'm not sure how to get that working in wivrn so it's untested.
+# TODO: add a UI to enable/disable from within XR, and provide a point-and-shoot
+#   color picker (in pause mode) to select the key_color ; save with video info.
+#chromakey = {'key_color': (128,128,128)}   # Key color is provided in RGB, but only the hue is used.
 
 class VideoPlayer(object):
 
-    def __init__(self, video_path, win_size=None, xr_mode=False, projection=None, gpu_id=0, plugins=[], max_speed=None, no_delay=False, loop=True, audio=False):
+    def __init__(self, opts:Options):
         """Creates a video player.
 
-        If win_size is None, only a help window will come up (to capture keyboard
-            and mouse events).  Otherwise the video will be played in a window of
-            at most that size.  win_size may be 'fullscreen' to open a full screen
-            window (for now on the primary monitor).
-
-        Because this relies on extensive global context, there can be only one VideoPlayer.
+        Because GL etc relies on extensive global context, there can be only one VideoPlayer.
 
         plugins is a list of objects that will be called at various points along
             the pipeline in various ways, giving them a chance to do something extra.
             The exact API here is TBD, so just scan the code for "plugins" or see
-            plugin examples.
-
-        max_speed is the maximum playback speed factor (1.0 = normal speed).
-
-        no_delay eliminates the realtime sleep and causes playback at the maximum possible
-            framerate.  Note speed still has impact here since speed controls frame repeats
-            and skips as opposed to impacting the actual display framerate.
-
-        projection can be None (blit or resize), or '360' (top/bot), other degrees (side-by-side)
-            or 'flat' for VR projections.
+            plugin examples.  Currently these are only applied to actual videos, not
+            to 2d UI (Videos Browser, etc).
         """
-        self.video_path  = video_path
-        self.cuda_ctx    = None
-        self.close_stack = []           # This accumulates items to .close() later (in reverse order)
-        self.plugins     = plugins
-        self.max_speed   = max_speed    # Some modes may need to limit playback speed.
-        self.no_delay    = no_delay
-        self.loop        = loop
-        self.audio       = audio
+        self.opts = opts
 
-        if audio:
-            from AudioLoad import load_audio
-            from AudioPlay import AudioPlay
-            print("Loading Audio: ", flush=True, end='')
-            self.audio_data = load_audio(video_path)
-            print(f"{self.audio_data.shape}")
+        self.cuda_ctx     = None
+        self.close_stack  = []           # This accumulates items to .close() later (in reverse order)
+        self.close_stack2 = []           # Same, but this is per-video.
 
-        if not glfw.init():
-            raise Exception("GLFW init failed")
+        self.projection = None
+        self.source     = None
+        self.io         = IO_glfw()
 
         try:
             #
             # Initialize CUDA
             #
             cuda.init()
-            self.cuda_ctx = cuda.Device(gpu_id).retain_primary_context()
+            self.cuda_ctx = cuda.Device(opts.gpu_id).retain_primary_context()
             self.cuda_ctx.push()
 
             #
+            # Set up the rendering pipeline(s).
+            #
+            # These booleans just tell us which pipelines are active.
+            # We could, I suppose, make a pipeline class which consumes
+            #  frames and then just populate a pipelines list with the
+            #  active pipelines, but for the moment there are so few...
+            #
+            self.p_cuda_texture_window = not opts.xr_mode   # For the moment; We *can* run both at the same time just fine.
+            self.p_cuda_xr             = opts.xr_mode
+
+            if self.p_cuda_texture_window:
+                from CupyToGLTexture import CupyToGLTexture
+                self.cupy_to_GL_texture = self.closable(CupyToGLTexture(vr=opts.projection))
+
+            if self.p_cuda_xr:
+                print("Initializing OpenXR")
+                from OpenXRDevice import OpenXRDevice
+                from CupyToOpenXR import CupyToOpenXR
+                from ProjectorVR  import VRProjector
+
+                self.io.set_size((2048, 2048))  # Needs to be done before xr_device.init()
+
+                self.xr_device = self.closable(OpenXRDevice(app_name="XR Play"))
+                xr_info        = self.xr_device.init()
+                xr_size        = xr_info['size']
+                print(f"VR Display: {xr_size[0]}x{xr_size[1]} per eye")
+
+                # Create CUDA → OpenXR mapper
+                self.cupy_to_xr = self.closable(CupyToOpenXR(
+                        output_size = xr_size,
+                        projector   = VRProjector(
+                            projection = opts.projection or '180', # Default to 180 if unspecified.
+                        ),
+                        swapchain_images = xr_info['swapchain_images'],
+                    ))
+
+
+        except:
+            self.close(False)
+            raise
+
+    # These seem a big hacky...
+    def cycle_projection(self):
+        proj = self.get_projection()
+        try:
+            i = projection_cycle.index(proj or 'mono')
+        except ValueError:
+            return
+        self.set_projection(projection_cycle[(i+1)%len(projection_cycle)])
+
+    def get_projection(self):
+        if self.p_cuda_xr:
+            return self.cupy_to_xr.projection
+        elif self.p_cuda_texture_window:
+            return self.cupy_to_GL_texture.projection
+        return None
+
+    def set_projection(self, proj):
+        if proj == self.projection:
+            return
+        if self.p_cuda_xr:
+            self.cupy_to_xr.set_projection(proj)
+        if self.p_cuda_texture_window:
+            self.cupy_to_GL_texture.set_projection(proj)
+        self.projection = proj
+        print(f"Projection: {proj}")
+
+    def launch_video(self):
+        """This sets up everything for the opts.video_path to start playing.
+
+        self.opts is consulted for various other options (audio? etc).
+
+        If opts.video_path is None a browser will be opened on self.opts.root_dir ;
+            if that is also None, then this won't do anything and will return True
+            (indication we should exit).
+
+        Presently this may block for many seconds as the entire audio
+            channel is read into memory...
+        """
+        opts = self.opts
+
+        self.audio_out = None
+
+        if opts.video_path is None:
+
+            if opts.root_dir is None:
+                return True
+
+            #
+            # Hack to open our video browser plugin as our "video":
+            #
+            from UI2D.VideoBrowserSource import VideoBrowserSource
+            #self.io.set_size(None)  # Full screen   -- This is problematic until we fix IO_glfw because fullscreen windows won't resize.
+            self.io.set_size((2048, 2048), False)
+            ui_size = self.io.size
+            self.source = self.closable2(VideoBrowserSource(opts.root_dir, ui_size, create=opts.create))
+            self.set_projection('mono') # TODO: In theory the source could report its projection...
+
+            fps = 60    # Max framerate of the 2D UI
+        else:
+            #
             # Open the video with the decoder (and register it to be closed at shutdown)
             #
-            self.source = self.closable(NvideoDecoder(video_path, gpu_id, use_cpu=False))
+            self.source = self.closable2(NvideoDecoder(opts.video_path, opts.gpu_id, use_cpu=False))
+
+            if opts.audio:
+                from AudioLoad import load_audio
+                print("Loading Audio: ", flush=True, end='')
+                self.audio_data = load_audio(opts.video_path)
+                print(f"{self.audio_data.shape}")
 
             #
             # NVC always returns an integer frame rate for some reason...  This is a
@@ -100,408 +206,427 @@ class VideoPlayer(object):
                     }.get(fps, fps)
 
             print(f"Video   : {self.source.width}x{self.source.height} @ {fps:.2f} ('{self.source.framerate:.2f}') fps")
-            print(f"Duration: {self.source.duration:.2f} seconds ({self.source.frame_count} frames)")
+            if self.source.duration:
+                print(f"Duration: {self.source.duration:.2f} seconds ({self.source.frame_count} frames)")
+            else:
+                print( "          (No duration specified).")
 
             source_size = (self.source.width, self.source.height)
 
-            #
-            # Calculate the window size:
-            #
-            if win_size is None:
-                win_width  = 640    # TBD -- big enough to print the help page.
-                win_height = 480
-                monitor    = None
-            elif win_size == 'fullscreen':
-                monitor    = glfw.get_primary_monitor()
-                mode       = glfw.get_video_mode(monitor)
-                win_width  = mode.size.width
-                win_height = mode.size.height
-            elif projection:
-                monitor    = None
-                win_width, win_height = win_size
-            else:
-                monitor    = None
-                win_width, win_height = self.calc_win_size(source_size, win_size)
-            print(f"Window  : {win_width}x{win_height}")
+            self.io.set_size(self.io.crop_size(source_size, opts.max_size))
+            print(f"Window  : {self.io.size}")
 
-            out_size = (win_width, win_height)
-     
-            #
-            # Create the GL window and make it the global rendering target:
-            #
-            self.window = glfw.create_window(win_width, win_height, "Cuda Play", monitor, None)
-            if not self.window:
-                raise Exception("Window creation failed")
-            glfw.make_context_current(self.window)
-            glfw.swap_interval(1)
+        #
+        # Establish the frame rate:
+        #
+        self.frame_time      = 1.0 / fps
+        self.last_frame_time = time()
 
-            #
-            # Now set up the rendering pipeline(s).
-            #
-            # These booleans just tell us which pipelines are active.
-            # We could, I suppose, make a pipeline class which consumes
-            #  frames and then just populate a pipelines list with the
-            #  active pipelines, but for the moment there are so few...
-            #
-            self.p_cuda_texture_window = win_size is not None
-            self.p_cuda_xr             = xr_mode
+        # Initialize plugins and other saved state:
+        info = Info.get(opts.video_path or "BROWSER")
 
-            if self.p_cuda_texture_window:
-                from CupyToGLTexture import CupyToGLTexture
-                # Scale down but not up:
-                if out_size[0] < source_size[0] or out_size[1] < source_size[1]:
-                    output_size = out_size
-                else:
-                    output_size = source_size
-                self.cupy_to_GL_texture = self.closable(CupyToGLTexture(source_size, output_size, vr=projection, init=True))
-
-            if self.p_cuda_xr:
-                print("Initializing OpenXR")
-                from OpenXRDevice import OpenXRDevice
-                from CupyToOpenXR import CupyToOpenXR
-                from ProjectorVR  import VRProjector
-
-                self.xr_device = self.closable(OpenXRDevice(app_name="XR Play"))
-                xr_info        = self.xr_device.init()
-                xr_size        = xr_info['size']
-                print(f"VR Display: {xr_size[0]}x{xr_size[1]} per eye")
-
-                # Create CUDA → OpenXR mapper
-                self.cupy_to_xr = self.closable(CupyToOpenXR(
-                        projector = VRProjector(
-                            input_size       = source_size,
-                            output_size      = xr_size,
-                            projection       = projection or '180', # Default to 180 if unspecified.
-                            # TODO: This *should* enable chromakey transparency,
-                            #    but I'm not sure how to get that working in wivrn so it's untested!
-                            # Obviously it should be under a switch when you put it in -- add a UI
-                            #   to enable/disable from within XR, and provide a point-and-shoot color
-                            #   picker (in pause mode) to select the key_color
-                            #chromakey = {'key_color': (128,128,128)}   # Key color is provided in RGB, but only the hue is used.
-                        ),
-                        swapchain_images = xr_info['swapchain_images'],
-                    ))
-
-            #
-            # Establish the frame rate:
-            #
-            self.frame_time      = 1.0 / fps
-            self.last_frame_time = time()
-
-            # Initialize plugins and other saved state:
-            info = Info.get(video_path)
-
-            if 'xrplay' in info:
-                xinfo                 = info['xrplay']
-                self.pitch_adjustment = xinfo['pitch']
-                self.yaw_adjustment   = xinfo['yaw']
-            else:
-                self.pitch_adjustment = 0
-                self.yaw_adjustment   = 0
-
-            for p in self.plugins:
-                p.init(info, source_size, fps, key_down=self.key_down)
-
-            if self.audio:
-                print("Opening audio device")
-                self.audio_out = self.closable(AudioPlay(self.audio_data, fps))
-
-        except:
-            self.close(False)
-            raise
-
-    def calc_win_size(self, source_size, max_size):
-        """Returns the size of the largest window matching source_size's aspect
-            ratio which is not bigger than either source_size or max_size in either dimension.
-        """
-        source_width, source_height = source_size
-        max_width   , max_height    = max_size
-
-        if source_width > max_width or source_height > max_height:
-            aspect = source_width / source_height
-            if aspect > max_width / max_height:
-                width  = max_width
-                height = int(max_width / aspect)
-            else:
-                height = max_height
-                width  = int(max_height * aspect)
+        if 'xrplay' in info:
+            xinfo                 = info['xrplay']
+            self.pitch_adjustment = xinfo.get('pitch', 0)
+            self.yaw_adjustment   = xinfo.get('yaw'  , 0)
+            self.screen_dist_adj  = xinfo.get('dist' , 1)
+            self.projection       = xinfo.get('proj' , opts.projection or (opts.xr_mode and '180' or 'mono'))
         else:
-            width  = source_width
-            height = source_height
+            self.pitch_adjustment = 0
+            self.yaw_adjustment   = 0
+            self.screen_dist_adj  = 1
+            self.projection       = opts.projection or (opts.xr_mode and '180' or 'mono')
 
-        return width, height
+        if opts.video_path:
+
+            for p in opts.plugins:
+                p.init_video(opts.video_path, info, source_size, fps, key_down=self.key_down)
+
+            if opts.audio:
+                print("Opening audio device")
+                from AudioPlay import AudioPlay
+                self.audio_out = self.closable2(AudioPlay(self.audio_data, fps))
+
+            # Don't look!
+            proj, self.projection = self.projection, None
+            self.set_projection(proj)
 
     def key_down(self, key):
-        return glfw.get_key(self.window, key) == glfw.PRESS
+        return key in self.io.keys_down
 
     def run(self, timers=None):
         """Main playback loop."""
-        print("Playing... Press Q to quit")
+        opts = self.opts
 
         if not self.p_cuda_texture_window:
             # If we're not rendering the movie to the window, we'll render the help screen:
             from HelpScreen import render_help
-            render_help()
-            glfw.swap_buffers(self.window)
+            render_help(self.io.size)
+            self.io.swap_buffers()
 
-        A, B, X, Y   = [Button() for i in range(4)]
-        SPC          = Key(self.window, glfw.KEY_SPACE)
-        RIGHT        = Key(self.window, glfw.KEY_RIGHT)
-        LEFT         = Key(self.window, glfw.KEY_LEFT )
-        UP           = Key(self.window, glfw.KEY_UP   )
-        DOWN         = Key(self.window, glfw.KEY_DOWN )
-        paused       = False
-        speed        = 1
-        frame_number = -1
+        A, B, X, Y  = [Button() for i in range(4)]
+
+        print("Playing... Press Escape to quit")
 
         try:
-            while not glfw.window_should_close(self.window):
+            while not self.io.quitted:   # Startup pains...
 
-                #
-                # Determine the frame number, and sync audio if applicable:
-                #
-                prior_frame_number = frame_number
+                if self.io.play:
+                    print(f"Launching {self.io.play}")
+                    opts.video_path = f"{opts.root_dir}/{self.io.play}"
+                    self.io.play    = None
 
-                if self.audio:
-                    self.audio_out.set_speed(speed)
-                    if paused:
-                        self.audio_out.pause()  # Idempotent
-                    else:
-                        self.audio_out.resume() # Idempotent
-                    frame_number = self.audio_out.get_current_frame()
-                else:
-                    if not paused:
-                        frame_number += speed
-
-                if frame_number < 0:
-                    frame_number = 0
-
-                #
-                # Decode the frame
-                #
-                timers and timers.start("Get next frame")
-                frame = self.source.get_frame(int(frame_number))    # frame is a cupy ndarray
-
-                if frame is None:
-                    if self.loop:
-                        print("Looping.")
-                        frame_number = 0
-                        frame = self.source.get_frame(0)
-                        if frame is None:
-                            print("Can't read frame 0 (bad/empty video?)")
-                            break
-                        if self.audio:
-                            self.audio_out.seek(0)
-                    else:
-                        print("End of video")
-                        break
-
-                #
-                # Apply any plugins to the frame:
-                #
-                skipped = int(frame_number) - int(prior_frame_number)
-                timers and timers.start("Plugins/source_frame")
-                for p in self.plugins:
-                    frame = p.source_frame(frame, paused, speed, skipped, frame_number)
-
-                #
-                # Render the frame through the active pipelines:
-                #
-                # CUDA-resident video frame -> GL texture -> onscreen window:
-                #
-                if self.p_cuda_texture_window:
-
-                    timers and timers.start("frame -> texture")
-                    self.cupy_to_GL_texture.invoke(frame)                           # frame -> texture
-                    timers and timers.start("texture -> window")
-                    render_GL_texture_to_window(self.cupy_to_GL_texture.texture)    # texture -> window
-
-                # CUDA-resident video frame -> OpenXR swapchain
-                if self.p_cuda_xr:
-
-                    # Poll for OpenXR events
-                    if not self.xr_device.poll_events():
-                        print("Session ended")
-                        break
-
-                    # Begin XR frame
-                    timers and timers.start("XR begin frame")
-                    frame_info = self.xr_device.begin_frame()
-
-                    controllers = frame_info.get('controllers')
-                    # E.g.:
-                    #   {'left': {'a_button': None,
-                    #             'b_button': None,
-                    #             'grip_pose': {'orientation': (0.5574334263801575,
-                    #                                           -0.12656213343143463,
-                    #                                           -0.31022343039512634,
-                    #                                           0.7596127390861511),
-                    #                           'position': (-0.0639796257019043,
-                    #                                        0.7555080652236938,
-                    #                                        -0.11990729719400406)},
-                    #             'squeeze': 1.0,
-                    #             'thumbstick': (-0.43317973613739014, -0.9013031721115112),
-                    #             'trigger': 1.0,
-                    #             'x_button': 1,
-                    #             'y_button': 1},
-                    #    'right': {'a_button': 0,
-                    #              'b_button': 0,
-                    #              'grip_pose': {'orientation': (-0.08653908967971802,
-                    #                                            0.2893432676792145,
-                    #                                            -0.5636680126190186,
-                    #                                            -0.7688106298446655),
-                    #                            'position': (0.5041968822479248,
-                    #                                         0.7592325806617737,
-                    #                                         -0.10087166726589203)},
-                    #              'squeeze': 0.0,
-                    #              'thumbstick': (0.0, 0.0),
-                    #              'trigger': 0.0,
-                    #              'x_button': None,
-                    #              'y_button': None}}
-
-                    #
-                    # TODO: Currently if the headset is taken off, this will keep decoding
-                    #  the video, which is reasonable if there is also a window up on the
-                    #  screen, but if there isn't then should we automatically "pause" the
-                    #  video decoding?
-                    #
-                    if frame_info['should_render']:
-
-                        # Render the cuda image directly to the active swapchain images:
-                        timers and timers.start("CUDA -> XR")
-                        self.cupy_to_xr.invoke(
-                            frame,
-                            frame_info['left_index'],       # Which image in the swapchain to render to
-                            frame_info['right_index'],
-                            frame_info['views'],            # Projection info
-                            self.pitch_adjustment,          # User-selectable pitch adjustment to views.
-                            self.yaw_adjustment
-                        )
-
-                    #
-                    # Submit frame to compositor.  We could wait until the frame time
-                    #  below, but minimizing latency takes priority over exact video
-                    #  frame timing in XR:
-                    #
-                    timers and timers.start("XR end frame")
-                    self.xr_device.end_frame()
-                else:
-                    controllers = None
-
-                #
-                # Wait until it's time to display this frame (swap buffers):
-                #
-                next_frame_time = self.last_frame_time + self.frame_time
-                now             = timers.start("sleep") if timers else time()
-                sleep_time      = next_frame_time - now
-
-                if sleep_time > 0 and not self.no_delay:
-                    sleep(sleep_time)
-                    self.last_frame_time += self.frame_time
-                else:
-                    self.last_frame_time = now
-
-                #
-                # Push the rendered frame out now that it's time:
-                #
-                if self.p_cuda_texture_window:
-                    timers and timers.start("GLFW Buffer Swap")
-                    glfw.swap_buffers(self.window)
- 
-                #
-                # UI / Check for exit
-                #
-                timers and timers.start("Poll events")
-                glfw.poll_events()
-
-                if self.key_down(glfw.KEY_Q):
+                if self.launch_video():
                     break
 
-                if controllers:
+                paused       = False
+                speed        = 1
+                frame_number = -1
 
-                    left  = controllers.get( 'left', {})
-                    right = controllers.get('right', {})
+                while self.source is not None and not self.io.quitted:
 
-                    if right.get('b_button'):
+                    #
+                    # Determine the frame number, and sync audio if applicable:
+                    #
+                    prior_frame_number = frame_number
+
+                    if opts.audio and self.audio_out is not None:
+                        self.audio_out.set_speed(speed)
+                        if paused:
+                            self.audio_out.pause()  # Idempotent
+                        else:
+                            self.audio_out.resume() # Idempotent
+                        frame_number = self.audio_out.get_current_frame()
+                    else:
+                        if not paused:
+                            frame_number += speed
+
+                    if frame_number < 0:
+                        frame_number = 0
+
+                    #
+                    # Decode the frame
+                    #
+                    timers and timers.start("Get next frame")
+                    frame = self.source.get_frame(int(frame_number), self.io)    # frame is a cupy ndarray
+
+                    # If we hit the end of the video...
+                    if frame is None:
+
+                        timers and timers.start("End of video")
+
+                        # Loop if we should and can:
+                        if opts.loop and opts.video_path:   # Loop videos, not UI
+                            print("Looping.")
+                            frame_number = 0
+                            frame = self.source.get_frame(0, self.io)
+                            if frame is None:
+                                print("Can't read frame 0 (bad/empty video?)")
+                            elif opts.audio:
+                                self.audio_out.seek(0)
+
+                        # If we didn't or couldn't loop, we're done, so close it:
+                        if frame is None:
+                            print("End of video")
+                            self.close2()               # This closes the current video and all the stuff supporting it.
+                            break                       # Kill the per-frame loop and fall back to the per-video loop
+
+                    #
+                    # Apply any plugins to the frame (if video):
+                    #
+                    if opts.video_path:
+                        skipped = int(frame_number) - int(prior_frame_number)
+                        timers and timers.start("Plugins/source_frame")
+                        for p in opts.plugins:
+                            frame = p.source_frame(frame, paused, speed, skipped, frame_number)
+
+                    #
+                    # Render the frame through the active pipelines:
+                    #
+                    # CUDA-resident video frame -> GL texture -> onscreen window:
+                    #
+                    if self.p_cuda_texture_window:
+
+                        frame_height, frame_width, _ = frame.shape
+
+                        # Cupy->GL Texture should scale down but not up (more efficient
+                        #   to scale up at the final render to the window):
+                        if self.io.size[0] < frame_width or self.io.size[1] < frame_width:
+                            texture_size = self.io.size
+                        else:
+                            texture_size = (frame_width, frame_height)
+
+                        timers and timers.start("frame -> texture")
+                        #timers and timers.start(f"frame {(frame_width,frame_height)} -> texture {texture_size}")
+                        texture = self.cupy_to_GL_texture.invoke(input_image=frame, dest_size=texture_size, timers=timers) # frame -> texture
+                        timers and timers.start("texture -> window")
+                        render_GL_texture_to_window(texture=texture, window_size=self.io.size)    # texture -> window
+
+                    # CUDA-resident video frame -> OpenXR swapchain
+                    if self.p_cuda_xr:
+
+                        # Poll for OpenXR events
+                        if not self.xr_device.poll_events():
+                            print("Session ended")
+                            self.io.quit()
+                            break
+
+                        # Begin XR frame
+                        timers and timers.start("XR begin frame")
+                        frame_info = self.xr_device.begin_frame()
+
+                        controllers = frame_info.get('controllers')
+                        # E.g.:
+                        #   {'left': {'a_button': None,
+                        #             'b_button': None,
+                        #             'aim': {'orientation': (0.5574334263801575,
+                        #                                           -0.12656213343143463,
+                        #                                           -0.31022343039512634,
+                        #                                           0.7596127390861511),
+                        #                           'position': (-0.0639796257019043,
+                        #                                        0.7555080652236938,
+                        #                                        -0.11990729719400406)},
+                        #             'squeeze': 1.0,
+                        #             'thumbstick': (-0.43317973613739014, -0.9013031721115112),
+                        #             'trigger': 1.0,
+                        #             'x_button': 1,
+                        #             'y_button': 1},
+                        #    'right': {'a_button': 0,
+                        #              'b_button': 0,
+                        #              'aim': {'orientation': (-0.08653908967971802,
+                        #                                            0.2893432676792145,
+                        #                                            -0.5636680126190186,
+                        #                                            -0.7688106298446655),
+                        #                            'position': (0.5041968822479248,
+                        #                                         0.7592325806617737,
+                        #                                         -0.10087166726589203)},
+                        #              'squeeze': 0.0,
+                        #              'thumbstick': (0.0, 0.0),
+                        #              'trigger': 0.0,
+                        #              'x_button': None,
+                        #              'y_button': None}}
+
+                        #
+                        # TODO: Currently if the headset is taken off, this will keep decoding
+                        #  the video, which is reasonable if there is also a window up on the
+                        #  screen, but if there isn't then should we automatically "pause" the
+                        #  video decoding?
+                        #
+                        if frame_info['should_render']:
+
+                            # Render the cuda image directly to the active swapchain images:
+                            timers and timers.start("CUDA -> XR")
+                            self.cupy_to_xr.invoke(
+                                frame,
+                                frame_info['left_index'],       # Which image in the swapchain to render to
+                                frame_info['right_index'],
+                                frame_info['views'],            # Projection info
+                                self.pitch_adjustment,          # User-selectable pitch adjustment to views.
+                                self.yaw_adjustment,
+                                self.screen_dist_adj*3.0,       # User-selectable screen distance for flat projection only; default 3 meters
+                                self.source.width/self.source.height    # Aspect ratio, for mono and flat
+                            )
+
+                        #
+                        # Submit frame to compositor.  We could wait until the frame time
+                        #  below, but minimizing latency takes priority over exact video
+                        #  frame timing in XR:
+                        #
+                        timers and timers.start("XR end frame")
+                        self.xr_device.end_frame()
+                    else:
+                        controllers = None
+
+                    #
+                    # Wait until it's time to display this frame (swap buffers):
+                    #
+                    next_frame_time = self.last_frame_time + self.frame_time
+                    now             = timers.start("sleep") if timers else time()
+                    sleep_time      = next_frame_time - now
+
+                    if sleep_time > 0 and not opts.no_delay:
+                        sleep(sleep_time)
+                        self.last_frame_time += self.frame_time
+                    else:
+                        self.last_frame_time = now
+
+                    #
+                    # Push the rendered frame out now that it's time:
+                    #
+                    if self.p_cuda_texture_window:
+                        timers and timers.start("Buffer Swap")
+                        self.io.swap_buffers()
+     
+                    #
+                    # UI / Check for exit
+                    #
+                    timers and timers.start("Poll events")
+                    self.io.clear()     # We should have used up any accumulators by now.
+                    self.io.poll_events()
+
+                    if controllers: # XR controllers setup and plugins UI
+
+                        left  = controllers.get( 'left', {})
+                        right = controllers.get('right', {})
+
+                        # down-click event on B button acts like escape -- exit current thing:
+                        if B.click(right.get('b_button')):
+                            self.io.keystrokes.append('escape')  # Can you taste the barf?
+
+                        # down-click event on A button toggles pause:
+                        if A.click(right.get('a_button')):
+                            paused = not paused
+
+                        if paused:
+                            if right.get('thumbstick_click'):
+                                self.pitch_adjustment = 0
+                                self.yaw_adjustment   = 0
+                                self.screen_dist_adj  = 1
+                            else:
+                                stickY, stickP = (right.get('thumbstick') or (0, 0))
+                                if abs(stickP) > 0.05:
+                                    self.pitch_adjustment += stickP*0.01
+                                if abs(stickY) > 0.05:
+                                    self.yaw_adjustment   += stickY*0.01
+                                self.screen_dist_adj *= (1 + (right.get('trigger') or 0)*0.01) / (1 + (right.get('squeeze') or 0)*0.01)
+
+                        if opts.video_path:
+                            # Video playing:
+                            for p in opts.plugins:
+                                p.ui(paused, left)
+                        else:
+                            # Browser active:
+                            #
+                            # Override the mouse with the right controller aim if it's pointed
+                            #   at the screen:
+                            #
+                            if (aim := right.get('aim')):
+                                uv = self.cupy_to_xr.project_aim_to_screen(
+                                            aim             = aim,
+                                            leveling_offset = self.pitch_adjustment,
+                                            yaw_offset      = self.yaw_adjustment,
+                                            screen_distance = self.screen_dist_adj*3.0)
+                                if uv:
+                                    u, v = uv
+                                    if 0 <= u < 1 and 0 <= v < 1:
+                                        self.io.mouse_x = int(u * self.io.size[0])
+                                        self.io.mouse_y = int(v * self.io.size[1])
+                            if not paused:
+                                dx, dy = (right.get('thumbstick') or (0, 0))
+                                self.io.mouse_scroll_y += dy
+                                self.io.mouse_down = ((right.get('trigger') or 0) + self.io.mouse_down/3) > 0.5
+
+                    else:   # No XR controllers plugins UI
+
+                        if opts.video_path:
+                            for p in opts.plugins:
+                                p.ui(paused)
+
+                    self.source.handle_events(self.io)  # This may consume some keys (notably 'escape' in some contexts)
+
+                    if 'escape' in self.io.keystrokes:
+                        if opts.video_path:
+                            self.close2()
+                        else:
+                            self.io.quit()
                         break
 
-                    # down-click event on A button toggles pause:
-                    if A.click(right.get('a_button')):
-                        paused = not paused
+                    if controllers: # In XR mode, the XR device controls speed:
 
-                    if paused:
-                        if right.get('thumbstick_click'):
-                            self.pitch_adjustment = 0
-                            self.yaw_adjustment   = 0
-                        else:
-                            stickY, stickP = (right.get('thumbstick') or (0, 0))
-                            if abs(stickP) > 0.05:
-                                self.pitch_adjustment += stickP*0.01
-                            if abs(stickY) > 0.05:
-                                self.yaw_adjustment   += stickY*0.01
+                        # We'll still process some keyboard keys in XR mode:
+                        if opts.video_path: # In general the browser UI owns keyboard events...
+                            for key in self.io.keystrokes:
+                                if key == ' ':
+                                    paused = not paused
+                                    if paused:
+                                        print(f"FRAME: {frame_number}")
+                                elif key == 'p':
+                                    self.cycle_projection()
 
-                    for p in self.plugins:
-                        p.ui(paused, left)
-                else:
-                    for p in self.plugins:
-                        p.ui(paused)
-
-                if SPC.click():
-                    paused = not paused
-                    if paused:
-                        print(f"FRAME: {frame_number}")
-
-                if controllers: # In XR mode, the XR device controls speed:
-                    if not paused:
-                        if right.get('thumbstick_click'):
-                            speed = 1
-                        else:
-                            stick = (right.get('thumbstick') or (0, 0))[0]
-                            if abs(stick) > 0.1:
-                                speed *= 1.01 ** (right.get('thumbstick') or (0, 0))[0]
-                                if speed < 0.01:
-                                    speed = 0.01
-                                elif speed > 100:
-                                    speed = 100
-                else:
-                    if paused:
-                        # FIXME: These bork "skipped" via prior_frame_number inference.  See above.
-                        # FIXME: These also won't work in audio mode because frame_number is *derived* in that case.
-                        pfn = frame_number
-                        if RIGHT.click():
-                            frame_number += 1
-                        if LEFT.click():
-                            frame_number -= 1
-                        if UP.click():
-                            frame_number += 10
-                        if DOWN.click():
-                            frame_number -= 10
-                        if frame_number < 0:
-                            frame_number = 0
-                        if frame_number != pfn:
-                            print(f"FRAME: {frame_number}")
+                        if not paused:
+                            if right.get('thumbstick_click'):
+                                speed = 1
+                            else:
+                                stick = (right.get('thumbstick') or (0, 0))[0]
+                                if abs(stick) > 0.1:
+                                    speed *= 1.01 ** (right.get('thumbstick') or (0, 0))[0]
+                                    if speed < 0.01:
+                                        speed = 0.01
+                                    elif speed > 100:
+                                        speed = 100
                     else:
-                        if self.key_down(glfw.KEY_RIGHT):
-                            speed = 10
-                        elif self.key_down(glfw.KEY_LEFT):
-                            speed = -10
-                        elif self.key_down(glfw.KEY_UP):
-                            speed = 100
-                        elif self.key_down(glfw.KEY_DOWN):
-                            #speed = -100
-                            speed = 0.5
-                        else:
-                            speed = 1
+                        #
+                        # Non-XR mode UI controls:
+                        #
+                        # For now we've manually hacked this in here but really this video
+                        #  shuffling should be handled by the video source UI (which would
+                        #  automatically switch over to the browser UI when applicable).
+                        #
+                        if opts.video_path:
+                            if paused:
+                                #
+                                # Non-XR mode controls while paused:
+                                #
 
-                if self.max_speed and speed > self.max_speed:
-                    speed = self.max_speed
+                                # FIXME: These bork "skipped" via prior_frame_number inference.  See above.
+                                # FIXME: These also won't work in audio mode because frame_number is *derived* in that case.
+                                pfn = frame_number
 
-        finally: 
+                                for key in self.io.keystrokes:
+                                    if key == ' ':
+                                        paused = not paused
+                                        if paused:
+                                            print(f"FRAME: {frame_number}")
+                                    elif key == 'right':
+                                        frame_number += 1
+                                    elif key == 'left':
+                                        frame_number -= 1
+                                    elif key == 'up':
+                                        frame_number += 10
+                                    elif key == 'down':
+                                        frame_number -= 10
+                                    elif key == 'p':
+                                        self.cycle_projection()
+
+                                if frame_number < 0:
+                                    frame_number = 0
+                                if frame_number != pfn:
+                                    print(f"FRAME: {frame_number}")
+                            else:
+                                #
+                                # Non-XR mode controls while not paused:
+                                #
+                                for key in self.io.keystrokes:
+                                    if key == ' ':
+                                        paused = not paused
+                                        if paused:
+                                            print(f"FRAME: {frame_number}")
+                                    elif key == 'p':
+                                        self.cycle_projection()
+
+                                if self.key_down('right'):
+                                    speed = 10
+                                elif self.key_down('left'):
+                                    speed = -10
+                                elif self.key_down('up'):
+                                    speed = 100
+                                elif self.key_down('down'):
+                                    #speed = -100
+                                    speed = 0.5
+                                else:
+                                    speed = 1
+
+                    if opts.max_speed and speed > opts.max_speed:
+                        speed = opts.max_speed
+
+        except Exception:
+            self.close(False)
+            raise
+        else: 
             if timers:
                 timers.start(None)
                 timers.dump()
             self.close()
-
 
     def closable(self, ob):
         """This just registers a newly created ob to be .close()'d at shutdown time.
@@ -509,24 +634,61 @@ class VideoPlayer(object):
         self.close_stack.append(ob)
         return ob
 
-    def close(self, save=True):
-        """Clean up resources.
+    def closable2(self, ob):
+        """This just registers a newly created ob to be .close()'d when the video ends.
         """
+        self.close_stack2.append(ob)
+        return ob
+
+    def close2(self, save=True):
+        """Closes the current video, and sets self.source and self.opts.video_path to None.
+        """
+        opts = self.opts
+
+        if self.source is None:
+            return
+
+        #print(f"-- Closing {opts.video_path or 'browser'} --")
+
+        self.audio_data = None
+
+        key = opts.video_path or "BROWSER"
         if save:
-            # Save state
-            info0 = Info.get(self.video_path)
+            # Save user state
+            info0 = Info.get(key)
             info  = dict(info0)
             info['xrplay'] = {
                 'pitch': self.pitch_adjustment,
-                'yaw': self.yaw_adjustment,
+                'yaw'  : self.yaw_adjustment,
+                'dist' : self.screen_dist_adj,
+                'proj' : self.projection,
             }
         else:
             info = {}
-        for p in self.plugins:
-            p.close(info)
+        if opts.video_path:
+            for p in opts.plugins:
+                #print(f"Closing {opts.video_path} with {p}")
+                # CAUTION: p.close_video needs to be idempotent
+                # should be NOOP if already closed or never opened.
+                p.close_video(opts.video_path, info)
         if save and info != info0:
             print(f"Info db changed.  Saving.")
-            Info.put(self.video_path, info)
+            Info.put(key, info)
+
+        while self.close_stack2:
+            #print(f"Closing {type(self.close_stack2[-1]).__name__}")
+            self.close_stack2.pop().close()
+
+        self.source     = None
+        self.audio_out  = None
+        opts.video_path = None
+
+    def close(self, save=True):
+        """Clean up resources.
+        """
+        self.close2(save)
+
+        #print("-- Closing All --")
 
         # Close everything...
         while self.close_stack:
@@ -538,7 +700,13 @@ class VideoPlayer(object):
             self.cuda_ctx.pop()
 
         #print("Closing GL")
-        glfw.terminate()
+        if self.io is not None:
+            self.io.close()
+            self.io = None
+
+        for p in self.opts.plugins:
+            #print("Closing {p}")
+            p.close()
 
 # Helpers:
 class Button(object):
@@ -556,29 +724,18 @@ class Button(object):
         self.down = down
         return click
 
-class Key(Button):
-
-    def __init__(self, window, key):
-        Button.__init__(self)
-        self.window = window
-        self.key    = key
-
-    def click(self):
-        return Button.click(self, glfw.get_key(self.window, self.key)==glfw.PRESS)
-
-
 if __name__ == "__main__":
 
     import sys
+    import os
     name = sys.argv[0].split('/')[-1]
 
-    help_string = f"""Usage: {name} <video_file>
+    help_string = f"""Usage: {name} <video_file_or_dir>
     [-h(elp)]
     [-s(ize) max_width,max_height]
     [-xr (toggle xr mode)]
-    [-p(rojection) <deg> (vr <deg> sbs) / 360 (vr 360 tb) / flat (vr cinema mode) / (default: no projection)]
+    [-p(rojection) <deg> (vr <deg> sbs) / 360 (vr 360 tb) / flat (vr 3d cinema) / mono (vr 2d cinema) ; default: no projection]
     [-f(ull screen)]
-    [-n(o output)]
     [-F(ast)]
     [-t(imers)]
     [-M(otion)]
@@ -587,6 +744,8 @@ if __name__ == "__main__":
     [-T(eensy)]
     [-l(oop off)]
     [-a(udio enable)]
+    [-B(rowse) <directory> ; after video ends]
+    [-C(reate database)]
 """
 
     def run():
@@ -603,15 +762,13 @@ if __name__ == "__main__":
                 elif arg == '-s':
                     opts.max_size = tuple(int(s) for s in args.pop(0).split(','))
                 elif arg == '-f':
-                    opts.max_size = 'fullscreen'
+                    opts.max_size = None
 
                 elif arg == '-xr':
                     opts.xr_mode = not opts.xr_mode
-                    if not opts.max_size:
-                        opts.max_size = (1920, 1080)
                 elif arg == '-p':
                     projection = args.pop(0)
-                    if projection not in ('360', 'flat') and \
+                    if projection not in ('360', 'flat', 'mono') and \
                             not (projection.isdecimal() and 45 < float(projection) < 360) and\
                             not (projection[0]=='F' and projection[1:].isdecimal() and 45 < float(projection[1:]) <= 360):
                         print(f"Invalid projection: {projection!r}")
@@ -624,11 +781,35 @@ if __name__ == "__main__":
                     opts.timers = Timers()
                 elif arg == '-F':
                     opts.no_delay = True
-                elif arg == '-n':
-                    opts.max_size = None
                 elif arg == '-l':
                     opts.loop = False
 
+                elif arg == '-C':
+                    opts.create = True
+                    print("***************")
+                    print("***************")
+                    print("***")
+                    print("*** CAUTION")
+                    print("***")
+                    print("*** The -C option:")
+                    print("***")
+                    print("***  - will create an xrplay.db file in the video root directory")
+                    print("***  - will create a TRASH dir there as well, if needed")
+                    print("***  - will *move* duplicate videos (same data, not same name) to the TRASH dir")
+                    print("***  - browsing the same dir in the future will continue to index (and maybe move) new videos.")
+                    print("***")
+                    print("***************")
+                    print("***************\n")
+                    response = input("Type 'ok' to proceed: ")
+                    if response.lower() != 'ok':
+                        print("ABORTING")
+                        exit(0)
+                elif arg == '-B':
+                    opts.root_dir = args.pop(0)
+                    if not os.path.isdir(opts.root_dir):
+                        print(f"-B expects a directory, not {opts.root_dir!r}")
+                        print(help_string)
+                        exit(1)
 
                 elif arg == '-a':
                     opts.audio = True
@@ -647,14 +828,18 @@ if __name__ == "__main__":
                 exit(1)
 
         if opts.video_path is None:
-            print(help_string)
-            exit(1)
+            if opts.root_dir is None:
+                print(help_string)
+                exit(1)
+        elif os.path.isdir(opts.video_path):
+            if opts.root_dir is not None:
+                print("Two directories were given.  Which one should we browse?")
+                print(help_string)
+                exit(1)
+            opts.root_dir    = opts.video_path
+            opts.video_path  = None
 
-        #
-        # TODO: Now that we've moved to an options object (side effect of plugins handling) we should just
-        #  pass opts to VideoPlayer...
-        #
-        VideoPlayer(opts.video_path, opts.max_size, opts.xr_mode, projection=opts.projection, plugins=opts.plugins, max_speed=opts.max_speed, no_delay=opts.no_delay, loop=opts.loop, audio=opts.audio).run(opts.timers)
+        VideoPlayer(opts).run(opts.timers)
 
     run()
 

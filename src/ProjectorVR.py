@@ -297,7 +297,7 @@ void render_flat_projection(
     float tan_left, float tan_down, float tan_width, float tan_height,
     float inv_width, float inv_height,
     float screen_width, float screen_height, float screen_distance,
-    float u_offset
+    float u_scale, float u_offset
     )
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -345,7 +345,7 @@ void render_flat_projection(
     }
     
     // Convert hit point to UV coordinates (0 to 1)
-    float u = (hit_x / screen_width + 0.5f) * 0.5f + u_offset;  // 0.5 scale for side-by-side
+    float u = (hit_x / screen_width + 0.5f) * u_scale + u_offset;  // 0.5 u_scale for side-by-side
     float v = 1.0f - (hit_y / screen_height + 0.5f);
     
     // Convert to continuous pixel coordinates
@@ -398,13 +398,12 @@ class VRProjector(Projector):
 
     """Handles VR projection (180/etc/360, SBS/TB, fisheye, flat) to linear projection based on a viewing matrix.
     """
-    def __init__(self, input_size, output_size, projection='180', chromakey=None):
+    def __init__(self, projection='180', chromakey=None):
         """
         Args:
-            input_size: (width, height) of input video
-            output_size: (width, height) of output render target
             projection: '360' for 360° top-bottom, any other degrees for side-by-side, 
-                       'F{degrees}' for fisheye (e.g., 'F180'), 'flat' for virtual cinema (default: 180° sbs)
+                       'F{degrees}' for fisheye (e.g., 'F180'), 'flat' for virtual 3d cinema,
+                       'mono' for virtual 2d cinema.
             chromakey: Optional dict with keys:
                 - 'key_color': (r, g, b) in 0-255 range (default blue: (0, 0, 255))
                 - 'threshold_inner': float (default 0.1)
@@ -415,7 +414,7 @@ class VRProjector(Projector):
                 - 'y_gate2_max': float (default 0.15)
                 If None, chromakey is disabled.
         """
-        Projector.__init__(self, input_size, output_size)
+        Projector.__init__(self)
 
         # Set up chromakey parameters
         self.set_chromakey(chromakey)
@@ -437,11 +436,7 @@ class VRProjector(Projector):
         self.fov = None # Cache for naive invoke() mode
 
     def set_projection(self, projection):
-        """Set projection type. Can be changed on the fly.
-        
-        Args:
-            projection: '360' for 360° top-bottom, any other degrees for side-by-side,
-                       'F{degrees}' for fisheye (e.g., 'F180'), 'flat' for virtual cinema
+        """Set projection type. Can be changed on the fly.  See __init__ docs for valid projections.
         """
         if projection == '360':
             # 360° top-bottom
@@ -466,11 +461,17 @@ class VRProjector(Projector):
             self.v_offset_base = 0.0
             self.is_fisheye = False
         elif projection == 'flat':
-            # Flat virtual cinema screen (side-by-side)
-            self.u_offset_base = 0.5  # For eye selection (0=left, 0.5=right)
-            self.is_fisheye = False
+            # Flat virtual 3d cinema screen (side-by-side)
+            self.u_scale       = 0.5    # Half the image for each eye
+            self.u_offset_base = 0.5    # For eye selection (0=left, 0.5=right)
+            self.is_fisheye    = False
+        elif projection == 'mono':
+            # Flat virtual 2d cinema screen
+            self.u_scale       = 1.0    # Whole image for each eye
+            self.u_offset_base = 0.0    # Same source both eyes.
+            self.is_fisheye    = False
         else:
-            raise ValueError(f"Unknown projection type: {projection}. Use '360' (top/bot), '180' or other degrees (SBS), 'F180' or other degrees (fisheye), or 'flat'.")
+            raise ValueError(f"Unknown projection type: {projection}. Use '360' (top/bot), '180' or other degrees (SBS), 'F180' or other degrees (fisheye), 'flat' or 'mono'.")
         
         self.projection = projection
 
@@ -512,7 +513,7 @@ class VRProjector(Projector):
                 chromakey.get('y_gate2_max', 0.22),
             ], dtype=np.float32)
 
-    def invoke_vr(self, src_image, dst_image, rot_matrix, fov, leveling_offset=0, yaw_offset=0, eye=0, screen_size=2.5, screen_distance=3.0):
+    def invoke_vr(self, src_image, dst_image, dst_size, rot_matrix, fov, leveling_offset=0, yaw_offset=0, eye=0, screen_width=4.4, screen_height=2.475, screen_distance=3.0):
             """Project a single, angularly mapped (VR style) src_image to linear dst_image.
 
             src_image   is a cupy RGB image.
@@ -525,12 +526,11 @@ class VRProjector(Projector):
               .angle_down
             leveling_offset and yaw_offset are radians to pre-adjust rot_matrix's pitch and yaw by, as a convenience.
             eye         is 0 or 1, selecting which eye's view to render (0=first, 1=second).
-                        For SBS: 0=left half, 1=right half
+                        For SBS (incl flat, fisheye): 0=left half, 1=right half
                         For (360°) TB: 0=top half, 1=bottom half
-                        For flat: 0=left half, 1=right half
-                        For fisheye: 0=left half, 1=right half
-            screen_size is the height of the virtual screen in meters (flat projection only, default 2.5m)
-            screen_distance is the distance from viewer to screen in meters (flat projection only, default 3.0m)
+            screen_width  is the width of the virtual screen in meters      (flat/mono projections only, default 4.4m)
+            screen_height is the height of the virtual screen in meters     (flat/mono projections only, default 2.475m)
+            screen_distance is the distance from viewer to screen in meters (flat/mono projections only, default 3.0m)
             """
             # Apply pitch leveling and yaw offsets, if applicable
             if yaw_offset:
@@ -576,11 +576,14 @@ class VRProjector(Projector):
                     raise RuntimeError(f"Failed to create surface object: error {err}")
                 
                 try:
+                    input_height, input_width, _ = src_image.shape
+                    output_width, output_height  = dst_size
+
                     # Launch CUDA kernel (need to reduce block size on chromakey because of register pressure)
                     block_size = (16, 16, 1)
                     grid_size = (
-                        (self.output_width  + block_size[0] - 1) // block_size[0],
-                        (self.output_height + block_size[1] - 1) // block_size[1],
+                        (output_width  + block_size[0] - 1) // block_size[0],
+                        (output_height + block_size[1] - 1) // block_size[1],
                         1
                     )
 
@@ -594,25 +597,22 @@ class VRProjector(Projector):
                     tan_down   = np.tan(fov.angle_down)
                     tan_width  = tan_right - tan_left
                     tan_height = tan_up - tan_down
-                    inv_width  = 1.0 / self.output_width
-                    inv_height = 1.0 / self.output_height
+                    inv_width  = 1.0 / output_width
+                    inv_height = 1.0 / output_height
                     
                     # Choose kernel based on projection type
-                    if self.projection == 'flat':
+                    if self.projection in ('flat', 'mono'):
                         # Flat projection: compute screen dimensions from size parameter
-                        # Assume 16:9 aspect ratio for the screen
-                        screen_height = screen_size
-                        screen_width  = screen_height * (16.0 / 9.0)
-                        u_offset      = self.u_offset_base * eye
+                        u_offset = self.u_offset_base * eye
                         
                         self.render_flat_kernel(
                             np.intp(src_image.data.ptr),
                             np.int32(src_image.strides[0]),
-                            np.int32(self.input_width),
-                            np.int32(self.input_height),
+                            np.int32(input_width),
+                            np.int32(input_height),
                             np.uint64(surf_obj.value),
-                            np.int32(self.output_width),
-                            np.int32(self.output_height),
+                            np.int32(output_width),
+                            np.int32(output_height),
                             rot_array,
                             np.float32(tan_left),
                             np.float32(tan_down),
@@ -623,6 +623,7 @@ class VRProjector(Projector):
                             np.float32(screen_width),
                             np.float32(screen_height),
                             np.float32(screen_distance),
+                            np.float32(self.u_scale),
                             np.float32(u_offset),
                             block=block_size,
                             grid=grid_size,
@@ -637,11 +638,11 @@ class VRProjector(Projector):
                             self.render_fisheye_kernel_chromakey(
                                 np.intp(src_image.data.ptr),
                                 np.int32(src_image.strides[0]),
-                                np.int32(self.input_width),
-                                np.int32(self.input_height),
+                                np.int32(input_width),
+                                np.int32(input_height),
                                 np.uint64(surf_obj.value),
-                                np.int32(self.output_width),
-                                np.int32(self.output_height),
+                                np.int32(output_width),
+                                np.int32(output_height),
                                 rot_array,
                                 np.float32(tan_left),
                                 np.float32(tan_down),
@@ -660,11 +661,11 @@ class VRProjector(Projector):
                             self.render_fisheye_kernel(
                                 np.intp(src_image.data.ptr),
                                 np.int32(src_image.strides[0]),
-                                np.int32(self.input_width),
-                                np.int32(self.input_height),
+                                np.int32(input_width),
+                                np.int32(input_height),
                                 np.uint64(surf_obj.value),
-                                np.int32(self.output_width),
-                                np.int32(self.output_height),
+                                np.int32(output_width),
+                                np.int32(output_height),
                                 rot_array,
                                 np.float32(tan_left),
                                 np.float32(tan_down),
@@ -689,11 +690,11 @@ class VRProjector(Projector):
                             self.render_kernel_chromakey(
                                 np.intp(src_image.data.ptr),
                                 np.int32(src_image.strides[0]),
-                                np.int32(self.input_width),
-                                np.int32(self.input_height),
+                                np.int32(input_width),
+                                np.int32(input_height),
                                 np.uint64(surf_obj.value),
-                                np.int32(self.output_width),
-                                np.int32(self.output_height),
+                                np.int32(output_width),
+                                np.int32(output_height),
                                 rot_array,
                                 np.float32(tan_left),
                                 np.float32(tan_down),
@@ -715,11 +716,11 @@ class VRProjector(Projector):
                             self.render_kernel(
                                 np.intp(src_image.data.ptr),
                                 np.int32(src_image.strides[0]),
-                                np.int32(self.input_width),
-                                np.int32(self.input_height),
+                                np.int32(input_width),
+                                np.int32(input_height),
                                 np.uint64(surf_obj.value),
-                                np.int32(self.output_width),
-                                np.int32(self.output_height),
+                                np.int32(output_width),
+                                np.int32(output_height),
                                 rot_array,
                                 np.float32(tan_left),
                                 np.float32(tan_down),
@@ -770,10 +771,78 @@ class VRProjector(Projector):
             self.angle_left *= -1
             self.angle_up   *= -1
 
-    def invoke(self, source_image, dest_image):
+    def invoke(self, source_image, dest_image, dest_size, timers=None):
         "Returns straight ahead view of left eye by default."
 
         if self.fov is None:
-            self.fov = self.Fov(self.output_width, self.output_height, 50)  # Wide angle FOV more useful?
+            self.fov = self.Fov(*dest_size, 50)  # Wide angle FOV more useful?
 
-        self.invoke_vr(source_image, dest_image, self.identity_matrix, self.fov)
+        self.invoke_vr(source_image, dest_image, dest_size, self.identity_matrix, self.fov)
+
+    def project_ray_to_screen(self, rot_matrix, leveling_offset=0, yaw_offset=0, screen_width=4.4, screen_height=2.475, screen_distance=3.0):
+        """Project a ray (from rot_matrix forward direction) onto the virtual screen.
+        
+        Args:
+            rot_matrix: 3x3 rotation matrix representing the ray direction (e.g., from controller aim pose)
+            All parameters are as in invoke_vr() above.
+        
+        Returns:
+            (u, v) in [0, 1] range if ray hits screen, None otherwise.
+            (0, 0) is top-left, (1, 1) is bottom-right.
+        """
+        if self.projection not in ('flat', 'mono'): # Unlikely we'll ever need more but maybe.
+            return None
+        
+        # Apply the same transformations as invoke_vr does to the scene
+        if yaw_offset:
+            cos_p = np.cos(yaw_offset)
+            sin_p = np.sin(yaw_offset)
+            yaw_matrix = np.array([
+                [cos_p, 0, -sin_p],
+                [0,     1,      0],
+                [sin_p, 0,  cos_p]
+            ])
+            rot_matrix = yaw_matrix @ rot_matrix
+
+        if leveling_offset:
+            cos_p = np.cos(leveling_offset)
+            sin_p = np.sin(leveling_offset)
+            pitch_matrix = np.array([
+                [1,     0,      0],
+                [0, cos_p, -sin_p],
+                [0, sin_p,  cos_p]
+            ])
+            rot_matrix = pitch_matrix @ rot_matrix
+        
+        # Extract forward direction from rotation matrix (third column, negated)
+        # In OpenXR convention, forward is -Z
+        ray = -rot_matrix[:, 2]
+        
+        # Intersect ray with screen plane at -screen_distance along Z axis
+        # Screen is perpendicular to -Z, centered at origin
+        if ray[2] >= 0:
+            # Ray pointing away from screen
+            return None
+        
+        # Compute t where ray intersects the plane z = -screen_distance
+        # ray starts at origin (position ignored), so: t * ray.z = -screen_distance
+        t = -screen_distance / ray[2]
+        
+        # Compute hit point
+        hit_x = ray[0] * t
+        hit_y = ray[1] * t
+        
+        # Compute screen dimensions
+        half_width  = screen_width  * 0.5
+        half_height = screen_height * 0.5
+        
+        # Check if within bounds
+        if abs(hit_x) > half_width or abs(hit_y) > half_height:
+            return None
+        
+        # Convert to UV (0=top-left, 1=bottom-right)
+        u = (hit_x / screen_width) + 0.5
+        v = 0.5 - (hit_y / screen_height)  # Y is inverted (up is positive in 3D)
+        
+        return (u, v)
+

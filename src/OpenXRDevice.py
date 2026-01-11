@@ -9,7 +9,7 @@ class OpenXRDevice(object):
     """OpenXR VR headset output device.
 
     ALLOCATION:
-      - glfw must be initialized and with an active window (even if hidden) before creating this object.
+      - OpenGL must be initialized and with an active window (even if hidden) before creating this object.
       - OpenXR runtime creates swapchain images
       - We expose them for CUDA registration
 
@@ -53,14 +53,6 @@ class OpenXRDevice(object):
         Initialize OpenXR session and create swapchains.
         Returns dict of swapchain dimensions: {'width': int, 'height': int}
         """
-        if False:
-            # This is handled outside of this module now.
-            import glfw
-            glfw.init()
-            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
-            window = glfw.create_window(640, 480, "Hidden", None, None)
-            glfw.make_context_current(window)
-
         # Create instance
         try:
             self.instance = xr.create_instance(
@@ -409,7 +401,8 @@ class OpenXRDevice(object):
     def init_controllers(self):
 
         self.action_specs = {
-            "grip_pose"       : xr.ActionType.POSE_INPUT,
+            "aim"             : xr.ActionType.POSE_INPUT,
+           #"grip_pose"       : xr.ActionType.POSE_INPUT,   # The aim is what we care about for now...
             "trigger"         : xr.ActionType.FLOAT_INPUT,
             "squeeze"         : xr.ActionType.FLOAT_INPUT,
             "thumbstick"      : xr.ActionType.VECTOR2F_INPUT,
@@ -421,7 +414,8 @@ class OpenXRDevice(object):
         }
 
         binding_specs = {
-            "grip_pose"       : "grip/pose",
+           #"grip_pose"       : "grip/pose",
+            "aim"             : "aim/pose",
             "trigger"         : "trigger/value",
             "squeeze"         : "squeeze/value",
             "thumbstick"      : "thumbstick",
@@ -501,16 +495,28 @@ class OpenXRDevice(object):
         )
 
         # Create action spaces for pose tracking
-        self.grip_spaces = {
-            hand: xr.create_action_space(
-                self.session,
-                xr.ActionSpaceCreateInfo(
-                    action=self.actions["grip_pose"],
-                    subaction_path=self.hand_paths[hand]
+        if True:
+            self.aim_spaces = {
+                hand: xr.create_action_space(
+                    self.session,
+                    xr.ActionSpaceCreateInfo(
+                        action=self.actions["aim"],
+                        subaction_path=self.hand_paths[hand]
+                    )
                 )
-            )
-            for hand in self.hands
-        }
+                for hand in self.hands
+            }
+        else:
+            self.grip_spaces = {
+                hand: xr.create_action_space(
+                    self.session,
+                    xr.ActionSpaceCreateInfo(
+                        action=self.actions["grip_pose"],
+                        subaction_path=self.hand_paths[hand]
+                    )
+                )
+                for hand in self.hands
+            }
 
         # Map action types to getter functions
         self.action_getters = {
@@ -527,7 +533,7 @@ class OpenXRDevice(object):
 
             {'left': {'a_button': None,
                       'b_button': None,
-                      'grip_pose': {'orientation': (0.5574334263801575,
+                      'aim': {'orientation': (0.5574334263801575,
                                                     -0.12656213343143463,
                                                     -0.31022343039512634,
                                                     0.7596127390861511),
@@ -541,7 +547,7 @@ class OpenXRDevice(object):
                       'y_button': 1},
              'right': {'a_button': 0,
                        'b_button': 0,
-                       'grip_pose': {'orientation': (-0.08653908967971802,
+                       'aim': {'orientation': (-0.08653908967971802,
                                                      0.2893432676792145,
                                                      -0.5636680126190186,
                                                      -0.7688106298446655),
@@ -573,7 +579,8 @@ class OpenXRDevice(object):
                 if action_type == xr.ActionType.POSE_INPUT:
                     # Handle poses separately
                     pose = xr.locate_space(
-                        space      = self.grip_spaces[hand],
+                        #space      = self.grip_spaces[hand],
+                        space      = self.aim_spaces[hand],
                         base_space = self.space,
                         time       = self.frame_state.predicted_display_time
                     )
