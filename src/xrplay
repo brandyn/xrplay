@@ -122,7 +122,7 @@ class VideoPlayer(object):
         try:
             i = projection_cycle.index(proj or 'mono')
         except ValueError:
-            return
+            i = -1 
         self.set_projection(projection_cycle[(i+1)%len(projection_cycle)])
 
     def get_projection(self):

@@ -65,7 +65,12 @@ class CupyToOpenXR:
         """
         if views is None or len(views) < 2:
             raise ValueError("VR rendering requires 2 views")
-        
+ 
+        # Quick hack that hopefully infers the correctly intended aspect ratio for flat SBS
+        #   sources which sometimes are double width and sometimes aren't...
+        if self.projection == 'flat' and aspect_ratio >= 2:
+            aspect_ratio /= 2
+
         for eye_idx, eye_name, swapchain_index, view in [
                                 (0,  'left',  left_index, views[0]), 
                                 (1, 'right', right_index, views[1])]:

@@ -10,7 +10,6 @@ import imgui
 from imgui.integrations.opengl import ProgrammablePipelineRenderer
 from OpenGL.GL import *
 from pathlib import Path
-import numpy as np
 import sqlite3
 import math
 import xxhash
@@ -89,7 +88,14 @@ class VideoBrowserPlugin(object):
     """
     ALLOWED_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv', '.wmv', '.m4v'}
 
-    last_selected_video = None  # HACK to persist a little state across instantiations...
+    # HACK to persist UI state across instantiations:
+    selected_video    = None
+    selected_tags     = set()
+    min_rating        = 0
+    filter_no_tags    = False
+    filter_no_rating  = False
+    sort_by           = "name"  # name, date, rating, size
+    search_text       = ""
 
     def __init__(self, video_root, size=(1920, 1080), readonly=False, create=False):
         """readonly blocks any attempts to change the database (or delete
@@ -127,22 +133,25 @@ class VideoBrowserPlugin(object):
         self.fbo       = None
         self.depth_rbo = None
         
-        # UI State
-        self.selected_tags     = set()
-        self.min_rating        = 0
-        self.filter_no_tags    = False
-        self.filter_no_rating  = False
-        self.sort_by           = "name"  # name, date, rating, size
-        self.search_text       = ""
+        if False:   # We're moving these to the class for now so they persist (which means only one browser allowed at a time!)
+            # UI State
+            self.selected_tags     = set()
+            self.min_rating        = 0
+            self.filter_no_tags    = False
+            self.filter_no_rating  = False
+            self.sort_by           = "name"  # name, date, rating, size
+            self.search_text       = ""
+            self.selected_video    = None
+        else:
+            self.store = VideoBrowserPlugin # An easy way to stuff values into long-term storage while still accessible by self...
+        
+        # Transient UI state
+        self.scroll_to_hash = None  # For "back" navigation
         
         # File list cache
         self.all_videos      = []
         self.filtered_videos = []
         self.all_tags        = []
-        
-        # Selection state
-        self.selected_video = VideoBrowserPlugin.last_selected_video
-        self.scroll_to_hash = None  # For "back" navigation
         
         # Action callback
         self.action_callback = None
@@ -496,8 +505,8 @@ class VideoBrowserPlugin(object):
         changed, new_text = imgui.input_text("##search", self.search_buffer, 256)
         imgui.pop_item_width()
         if changed:
-            self.search_buffer = new_text
-            self.search_text   = new_text
+            self.search_buffer     = new_text
+            self.store.search_text = new_text
             self._apply_filters()
         
         imgui.same_line()
@@ -518,7 +527,7 @@ class VideoBrowserPlugin(object):
             for option in sort_options:
                 is_selected, _ = imgui.selectable(option, self.sort_by == option)
                 if is_selected:
-                    self.sort_by = option
+                    self.store.sort_by = option
                     self._apply_filters()
             imgui.end_combo()
         imgui.pop_item_width()
@@ -561,10 +570,10 @@ class VideoBrowserPlugin(object):
             
             if clicked:
                 if self.min_rating == star:
-                    self.min_rating = 0
+                    self.store.min_rating       = 0
                 else:
-                    self.min_rating = star
-                    self.filter_no_rating = False
+                    self.store.min_rating       = star
+                    self.store.filter_no_rating = False
                 self._apply_filters()
             
             # Draw star (filled if <= current min_rating, empty otherwise)
@@ -586,13 +595,7 @@ class VideoBrowserPlugin(object):
             
             imgui.same_line(spacing=self._scaled(2))
         
-        if False:   # Clicking on currently selected star handles this.
-            imgui.same_line()
-            if imgui.button("Clear##rating"):
-                self.min_rating = 0
-                self._apply_filters()
-        
-        clicked, self.filter_no_tags = imgui.checkbox("No Tags", self.filter_no_tags)
+        clicked, self.store.filter_no_tags = imgui.checkbox("No Tags", self.filter_no_tags)
         if clicked:
             if self.filter_no_tags:
                 self.selected_tags.clear()
@@ -600,10 +603,10 @@ class VideoBrowserPlugin(object):
         
         imgui.same_line()
         
-        clicked, self.filter_no_rating = imgui.checkbox("No Rating", self.filter_no_rating)
+        clicked, self.store.filter_no_rating = imgui.checkbox("No Rating", self.filter_no_rating)
         if clicked:
             if self.filter_no_rating:
-                self.min_rating = 0
+                self.store.min_rating = 0
             self._apply_filters()
         
         # Tag filters with wrapping
@@ -640,7 +643,7 @@ class VideoBrowserPlugin(object):
                         self.selected_tags.discard(tag)
                     else:
                         self.selected_tags.add(tag)
-                        self.filter_no_tags = False
+                        self.store.filter_no_tags = False
                     self._apply_filters()
                 
                 current_line_width += tag_width
@@ -815,8 +818,7 @@ class VideoBrowserPlugin(object):
         imgui.set_cursor_screen_pos(start_pos)
         clicked = imgui.invisible_button(f"##card_{video['hash']}", width, card_height)
         if clicked:
-            self.selected_video = video
-            VideoBrowserPlugin.last_selected_video = video
+            self.store.selected_video = video
         
         # Restore cursor to end of card
         imgui.set_cursor_pos((imgui.get_cursor_pos()[0], end_cursor_y))
@@ -826,7 +828,7 @@ class VideoBrowserPlugin(object):
     def go_back(self):
         if self.selected_video:
             self.scroll_to_hash = self.selected_video['hash']
-            self.selected_video = None
+            self.store.selected_video = None
             return True
         return False
 
@@ -989,27 +991,6 @@ class VideoBrowserPlugin(object):
                 current_line_width += tag_width
                 first_tag = False
 
-        if False:
-            imgui.separator()
-        
-            # Actions
-            if imgui.button("Play"):
-                self._trigger_action('play', video)
-            
-            imgui.same_line()
-            if imgui.button("Play 3D (SBS)"):
-                self._trigger_action('play_3d_sbs', video)
-            
-            imgui.same_line()
-            if imgui.button("Play 3D (OU)"):
-                self._trigger_action('play_3d_ou', video)
-        
-            imgui.same_line(spacing=self._scaled(50))
-            if imgui.button("Delete"):
-                # Simple confirmation - just require double-click
-                self._delete_video(video['hash'])
-                self.selected_video = None
-        
         imgui.end_group()
         imgui.separator()
         imgui.end()
@@ -1180,7 +1161,24 @@ class VideoBrowserPlugin(object):
         self.init_db(create)
 
         if index:
-            self.index_directory()
+            videos = self.index_directory()
+
+            #
+            # Now we need to run through the database looking for any files that have
+            #  gone missing:
+            #
+            remove = set()
+            for row in self.db_conn.execute('SELECT * FROM file_info ORDER BY file_path').fetchall():
+                if row['hash'] not in videos:
+                    print(f"Missing: {row['file_path']}")
+                    remove.add(row['hash'])
+            if remove:
+                print(f"Removing {len(remove)} missing files from database.")
+                for h in remove:
+                    self.db_conn.execute('DELETE FROM file_info WHERE hash = ?', (h,))
+
+            self.db_conn.commit()
+            self._refresh_file_list()
 
     def init_db(self, create=False):
         """Initialize database schema with migrations.
@@ -1264,6 +1262,10 @@ class VideoBrowserPlugin(object):
 
         videos = {} # Maps hash to info dict
 
+        #
+        # Scan all the videos in the directory, checking for things that have
+        #  moved or been renamed, for new videos, and for duplicates:
+        #
         if directory.exists():
             for item in list(directory.iterdir()):
                 if item.is_file() and item.suffix.lower() in self.ALLOWED_EXTENSIONS:
@@ -1522,6 +1524,30 @@ class VideoBrowserPlugin(object):
             'alt_paths': alt_paths,
             'rating'   : row[3] if row else 0,
         }
+    
+    def dump(self):
+        """Dump database to stdout in human-readable and parseable format."""
+        rows = self.db_conn.execute('SELECT * FROM file_info ORDER BY file_path').fetchall()
+        
+        if not rows:
+            print("# Database is empty")
+            return
+        
+        print("# Organizer Database Dump")
+        print(f"# Generated: {__import__('datetime').datetime.now().isoformat()}")
+        print("# Format: hash|file_path|file_size|mod_time|tags|alt_paths|rating")
+        print()
+
+        for row in rows:
+            hash_val  = row['hash'     ]
+            file_path = row['file_path']
+            file_size = row['file_size']
+            mod_time  = row['mod_time' ]
+            tags      = row['tags'     ] or ''
+            alt_paths = row['alt_paths'] or ''
+            rating    = row['rating'   ] or ''
+            
+            print(f"{(hash_val, file_path, file_size, mod_time, tags, alt_paths, rating)}")
     
     # ============= Misc =================
 
