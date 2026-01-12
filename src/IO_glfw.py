@@ -54,6 +54,9 @@ class IO_glfw(IO):
         else:
             size = self.crop_size(size, self.screen_size, aspect_ratio)
 
+        if size == self.size and aspect_ratio == self.aspect:
+            return
+
         if size == self.screen_size:
             monitor = self.monitor
         else:
@@ -108,7 +111,8 @@ class IO_glfw(IO):
             if aspect_ratio:
                 glfw.set_window_aspect_ratio(self.window, *size)
 
-        self.size = size
+        self.size   = size
+        self.aspect = aspect_ratio
 
     def swap_buffers(self):
         glfw.swap_buffers(self.window)

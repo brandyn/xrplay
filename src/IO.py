@@ -45,7 +45,8 @@ class IO(object):
 
         # The size (width, height) of the window or space that the mouse is in
         # This can change if the window is resized, etc.
-        self.size = None
+        self.size   = None
+        self.aspect = False     # True if the window aspect ratio is locked.
 
         # Mouse state
         self.mouse_x    = 0
@@ -90,7 +91,7 @@ class IO(object):
         """
         assert False, "Subclass needs to implement this"
 
-    def crop_size(self, size, max_size, aspect_ratio=True):
+    def crop_size(self, size, max_size=None, aspect_ratio=True):
         "Just a handy utility that crops size to max_size, optionally preserving aspect ratio."
         if max_size is None:
             return size
@@ -103,6 +104,9 @@ class IO(object):
             return size
         else:
             return tuple(min(size[i], max_size[i]) for i in (0, 1))
+
+    def crop_to_screen(self, size, aspect_ratio=True):
+        return self.crop_size(size, self.screen_size, aspect_ratio)
 
     def swap_buffers(self):
         # Swap render buffers.  Back-end specific...

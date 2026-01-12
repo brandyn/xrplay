@@ -3,6 +3,7 @@
 import glfw
 import pycuda.driver as cuda
 
+from pathlib       import Path
 from time          import perf_counter as time, sleep
 from NvideoDecoder import NvideoDecoder
 from GLop          import render_GL_texture_to_window
@@ -118,29 +119,39 @@ class VideoPlayer(object):
 
     # These seem a big hacky...
     def cycle_projection(self):
-        proj = self.get_projection()
         try:
-            i = projection_cycle.index(proj or 'mono')
+            i = projection_cycle.index(self.projection or 'mono')
         except ValueError:
             i = -1 
         self.set_projection(projection_cycle[(i+1)%len(projection_cycle)])
 
-    def get_projection(self):
-        if self.p_cuda_xr:
-            return self.cupy_to_xr.projection
-        elif self.p_cuda_texture_window:
-            return self.cupy_to_GL_texture.projection
-        return None
-
     def set_projection(self, proj):
-        if proj == self.projection:
-            return
-        if self.p_cuda_xr:
-            self.cupy_to_xr.set_projection(proj)
-        if self.p_cuda_texture_window:
-            self.cupy_to_GL_texture.set_projection(proj)
-        self.projection = proj
-        print(f"Projection: {proj}")
+        #
+        # This also resizes the window if needed.
+        #
+        if proj != self.projection:
+
+            if self.p_cuda_xr:
+                self.cupy_to_xr.set_projection(proj)
+
+            if self.p_cuda_texture_window:
+                self.cupy_to_GL_texture.set_projection(proj)
+
+            self.projection = proj
+            print(f"Projection: {proj}")
+
+        # Resize the window if needed:
+        if self.opts.video_path and proj in (None, 'mono', 'flat'):
+            size   = (self.source.width, self.source.height)
+            aspect = True
+            # Hack for likely intended aspect ratio...
+            if self.projection == 'flat' and size[0]/size[1]>= 2:
+                size = (size[0]//2, size[1])
+        else:
+            size   = (2048, 2048)
+            aspect = False
+        self.io.set_size(size, aspect)
+        print(f"Window  : {self.io.size}")
 
     def launch_video(self):
         """This sets up everything for the opts.video_path to start playing.
@@ -167,11 +178,8 @@ class VideoPlayer(object):
             # Hack to open our video browser plugin as our "video":
             #
             from UI2D.VideoBrowserSource import VideoBrowserSource
-            #self.io.set_size(None)  # Full screen   -- This is problematic until we fix IO_glfw because fullscreen windows won't resize.
-            self.io.set_size((2048, 2048), False)
-            ui_size = self.io.size
+            ui_size     = self.io.crop_to_screen((2048, 2048), False)
             self.source = self.closable2(VideoBrowserSource(opts.root_dir, ui_size, create=opts.create))
-            self.set_projection('mono') # TODO: In theory the source could report its projection...
 
             fps = 60    # Max framerate of the 2D UI
         else:
@@ -213,9 +221,6 @@ class VideoPlayer(object):
 
             source_size = (self.source.width, self.source.height)
 
-            self.io.set_size(self.io.crop_size(source_size, opts.max_size))
-            print(f"Window  : {self.io.size}")
-
         #
         # Establish the frame rate:
         #
@@ -230,12 +235,12 @@ class VideoPlayer(object):
             self.pitch_adjustment = xinfo.get('pitch', 0)
             self.yaw_adjustment   = xinfo.get('yaw'  , 0)
             self.screen_dist_adj  = xinfo.get('dist' , 1)
-            self.projection       = xinfo.get('proj' , opts.projection or (opts.xr_mode and '180' or 'mono'))
+            projection            = xinfo.get('proj' , opts.projection or (opts.xr_mode and '180' or 'mono'))
         else:
             self.pitch_adjustment = 0
             self.yaw_adjustment   = 0
             self.screen_dist_adj  = 1
-            self.projection       = opts.projection or (opts.xr_mode and '180' or 'mono')
+            projection            = opts.projection or (opts.xr_mode and '180' or 'mono')
 
         if opts.video_path:
 
@@ -246,10 +251,10 @@ class VideoPlayer(object):
                 print("Opening audio device")
                 from AudioPlay import AudioPlay
                 self.audio_out = self.closable2(AudioPlay(self.audio_data, fps))
+        else:
+            projection = 'mono'
 
-            # Don't look!
-            proj, self.projection = self.projection, None
-            self.set_projection(proj)
+        self.set_projection(projection) # May also resize the output window.
 
     def key_down(self, key):
         return key in self.io.keys_down
@@ -266,10 +271,10 @@ class VideoPlayer(object):
 
         A, B, X, Y  = [Button() for i in range(4)]
 
-        print("Playing... Press Escape to quit")
+        print("Playing... Press Escape (or B button in VR) to quit")
 
         try:
-            while not self.io.quitted:   # Startup pains...
+            while not self.io.quitted:  # Per-source loop
 
                 if self.io.play:
                     print(f"Launching {self.io.play}")
@@ -283,7 +288,7 @@ class VideoPlayer(object):
                 speed        = 1
                 frame_number = -1
 
-                while self.source is not None and not self.io.quitted:
+                while self.source is not None and not self.io.quitted:  # Per-frame loop
 
                     #
                     # Determine the frame number, and sync audio if applicable:
@@ -356,9 +361,10 @@ class VideoPlayer(object):
                         else:
                             texture_size = (frame_width, frame_height)
 
+                        # frame -> texture, with possible down-scale and/or VR projection:
                         timers and timers.start("frame -> texture")
-                        #timers and timers.start(f"frame {(frame_width,frame_height)} -> texture {texture_size}")
-                        texture = self.cupy_to_GL_texture.invoke(input_image=frame, dest_size=texture_size, timers=timers) # frame -> texture
+                        texture = self.cupy_to_GL_texture.invoke(input_image=frame, dest_size=texture_size, timers=timers)
+                        # texture -> window, simple linear but with possible implicit up-scale:
                         timers and timers.start("texture -> window")
                         render_GL_texture_to_window(texture=texture, window_size=self.io.size)    # texture -> window
 
@@ -562,7 +568,7 @@ class VideoPlayer(object):
                         #  shuffling should be handled by the video source UI (which would
                         #  automatically switch over to the browser UI when applicable).
                         #
-                        if opts.video_path:
+                        if opts.video_path: # UI for active video playback
                             if paused:
                                 #
                                 # Non-XR mode controls while paused:
@@ -572,11 +578,9 @@ class VideoPlayer(object):
                                 # FIXME: These also won't work in audio mode because frame_number is *derived* in that case.
                                 pfn = frame_number
 
-                                for key in self.io.keystrokes:
+                                for key in self.io.keystrokes:  # Raw key down events, including non-printables
                                     if key == ' ':
-                                        paused = not paused
-                                        if paused:
-                                            print(f"FRAME: {frame_number}")
+                                        paused = False
                                     elif key == 'right':
                                         frame_number += 1
                                     elif key == 'left':
@@ -588,6 +592,10 @@ class VideoPlayer(object):
                                     elif key == 'p':
                                         self.cycle_projection()
 
+                                for key in self.io.text_input:  # Cooked key down events, which captures capitalization
+                                    if key == 'T':
+                                        self.save_thumbnail_texture(texture, *texture_size, opts.video_path)
+
                                 if frame_number < 0:
                                     frame_number = 0
                                 if frame_number != pfn:
@@ -598,9 +606,8 @@ class VideoPlayer(object):
                                 #
                                 for key in self.io.keystrokes:
                                     if key == ' ':
-                                        paused = not paused
-                                        if paused:
-                                            print(f"FRAME: {frame_number}")
+                                        paused = True
+                                        print(f"FRAME: {frame_number}")
                                     elif key == 'p':
                                         self.cycle_projection()
 
@@ -627,6 +634,51 @@ class VideoPlayer(object):
                 timers.start(None)
                 timers.dump()
             self.close()
+
+    def save_thumbnail_texture(self, texture, width, height, video_path):
+        from OpenGL import GL
+        import numpy as np
+        import cv2
+        GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, 1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+        rgba = np.empty((height, width, 4), dtype=np.uint8)
+        GL.glGetTexImage(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba) # Read the data directly into the numpy array buffer
+        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+        self.save_thumbnail_bgr(cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR), video_path)
+
+    def save_thumbnail_cupy(self, frame, video_path):
+        """If you have a cupy source you can use this..."""
+        import cupy as cp
+        # Channel swap RGB -> BGR for OpenCV weirdness, then move to CPU:
+        self.save_thumbnail_bgr(cp.asnumpy(frame[:,:,::-1]), video_path)
+
+    def save_thumbnail_bgr(self, bgr, video_path):
+        import cv2
+        # Pick central square, then resize to 512x512:
+        h, w    = bgr.shape[:2]
+        size    = min(h, w)
+        y       = (h - size) // 2
+        x       = (w - size) // 2
+        cropped = bgr[y:y+size, x:x+size]
+        resized = cv2.resize(cropped, (512, 512), interpolation=cv2.INTER_CUBIC)
+        self.save_thumbnail_bgr512(resized, video_path)
+ 
+    def save_thumbnail_bgr512(self, bgr512, video_path):
+        """This is just raw image save with backup.
+
+        video_path here is typ and .mp4 path or such, and the
+            jpg will land next to it (and if we change
+            standards for where it goes we can change that
+            here).
+        """
+        import cv2
+        path = Path(video_path).with_suffix('.jpg')
+        print(f"Saving thumbnail: {path}")
+        if path.exists():
+            bak = gen_backup_path(path)
+            print(f"(Backing up old thumbnail to {bak}")
+            path.rename(bak)
+        cv2.imwrite(str(path), bgr512)
 
     def closable(self, ob):
         """This just registers a newly created ob to be .close()'d at shutdown time.
@@ -723,6 +775,16 @@ class Button(object):
         click     = down and not self.down
         self.down = down
         return click
+
+def gen_backup_path(path: Path) -> Path:
+    counter = 0
+    while True:
+        bak_path = Path(f"{path}.bak.{counter}" if counter else f"{path}.bak")
+        if not bak_path.exists():
+            return bak_path
+        counter += 1
+
+
 
 if __name__ == "__main__":
 

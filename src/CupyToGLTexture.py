@@ -30,7 +30,7 @@ class CupyToGLTexture(object):
 
         self.close()    # We'll just rebuild from scratch when we change projections...
 
-        if projection and projection != "mono":
+        if projection and projection not in ("mono", "flat"):
             from ProjectorVR import VRProjector
             self.projector = VRProjector(projection=projection)
         else:
@@ -79,6 +79,9 @@ class CupyToGLTexture(object):
         """
         if dest_size != self.texture_size:
             self.configure(dest_size)
+
+        if self.projection == 'flat':   # Special case, we're doing a simple resize on Half of a flat
+            input_image = input_image[:, 0:input_image.shape[1]//2, :]
 
         self.projector.invoke(input_image, self.cuda_img, self.texture_size, timers=timers)
 

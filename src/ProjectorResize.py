@@ -142,10 +142,14 @@ class ResizeProjector(Projector):
  
     def invoke(self, source_image, dest_image, dest_size, timers=None):
         
-        # Ensure image is contiguous
-        if not source_image.flags.c_contiguous:
-            print("DEBUG: Source Image non-contiguous.")
-            source_image = cp.ascontiguousarray(source_image)
+        if False:
+            # This case DOES happen when source_image is the left half of a flat projection
+            #  But because we use the stride, it works fine without this needless copy:
+
+            # Ensure image is contiguous
+            if not source_image.flags.c_contiguous:
+                print("DEBUG: Source Image non-contiguous.")
+                source_image = cp.ascontiguousarray(source_image)
         
         input_height, input_width, _ = source_image.shape
         output_width, output_height  = dest_size
