@@ -10,7 +10,7 @@ Audio currently works but is a big hack (it pre-loads the entire audio track int
 
 Multiple VR projections are supported (SBS, Top-Bottom, Fisheye, all at 180, 360, or arbitrary).
 
-If you launch it on a folder, it will index the folder (recursively) for videos and bring up a video navigator.  It (simply) expects .jpg files with the same root path as the video file for the thumbnails, which have to be made separately atm.  The navigator works in both desktop and VR modes.  The navigator supports tagging, ratings, filtering and sorting.
+If you launch it on a folder, it will index the folder (recursively) for videos and bring up a video navigator.  It (simply) expects .jpg files with the same root path as the video file for the thumbnails (hit T in the desktop viewer while paused to save the current frame as a thumbnail).  The navigator works in both desktop and VR modes.  The navigator supports tagging, ratings, filtering and sorting.
 
 VR rendering goes from the video decode buffer to the OpenXR swapchain image via a single Cuda kernel--no needless frame copies.  It achieves smooth playback, with head tracking, of high-resolution 180 SBS VR videos (e.g., 6Kx3K@60fps to a Quest 3 via WiVRn without breaking a sweat) which other OpenXR players I found, even though written in faster languages, couldn't keep up with.
 
