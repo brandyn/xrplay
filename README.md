@@ -8,7 +8,7 @@ I've tried to keep it as simple and modular as possible, without sacrificing spe
 
 Audio currently works but is a big hack (it pre-loads the entire audio track into memory).
 
-Multiple VR projections are supported (SBS, Top-Bottom, Fisheye, all at 180, 360, or arbitrary).
+Multiple VR projections are supported (SBS, Top-Bottom, Fisheye, all at 180, 360, or arbitrary).  Google Cardboard VR panoramas are supported (name the files \*.vr.jpg), including audio.
 
 If you launch it on a folder, it will index the folder (recursively) for videos and bring up a video navigator.  It (simply) expects .jpg files with the same root path as the video file for the thumbnails (hit T in the desktop viewer while paused to save the current frame as a thumbnail).  The navigator works in both desktop and VR modes.  The navigator supports tagging, ratings, filtering and sorting.
 
@@ -45,7 +45,7 @@ Ping me if you try it.  As far as I'm aware, nobody has yet.
 ```bash
    pip install -r requirements.txt
 ```
-   Current dependencies:
+   Current dependencies (partial list; some features require more...):
    - `glfw>=2.10.0`
    - `numpy>=2.3.4`
    - `pycuda>=2025.1.2`

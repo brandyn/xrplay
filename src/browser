@@ -153,6 +153,24 @@ if __name__ == '__main__':
                 readonly = True
             elif arg == '-C':
                 create = True
+                print("***************")
+                print("***************")
+                print("***")
+                print("*** CAUTION")
+                print("***")
+                print("*** The -C option:")
+                print("***")
+                print("***  - will create an xrplay.db file in the video root directory")
+                print("***  - will create a TRASH dir there as well, if needed")
+                print("***  - will *move* duplicate videos (same data, not same name) to the TRASH dir")
+                print("***  - browsing the same dir in the future will continue to index (and maybe move) new videos.")
+                print("***")
+                print("***************")
+                print("***************\n")
+                response = input("Type 'ok' to proceed: ")
+                if response.lower() != 'ok':
+                    print("ABORTING")
+                    exit(0)
             elif arg == '-d':
                 dump = True
             else:

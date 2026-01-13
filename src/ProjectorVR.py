@@ -513,6 +513,31 @@ class VRProjector(Projector):
                 chromakey.get('y_gate2_max', 0.22),
             ], dtype=np.float32)
 
+    def apply_view_adjustments(self, rot_matrix, leveling_offset=0, yaw_offset=0):
+        if yaw_offset:
+            cos_p = np.cos(yaw_offset)
+            sin_p = np.sin(yaw_offset)
+            # Rotation matrix for yaw (rotation around Y-axis)
+            yaw_matrix = np.array([
+                [cos_p, 0, -sin_p],
+                [0,     1,      0],
+                [sin_p, 0,  cos_p]
+            ])
+            rot_matrix = yaw_matrix @ rot_matrix
+
+        if leveling_offset:
+            cos_p = np.cos(leveling_offset)
+            sin_p = np.sin(leveling_offset)
+            # Rotation matrix for pitch (rotation around X-axis)
+            pitch_matrix = np.array([
+                [1,     0,      0],
+                [0, cos_p, -sin_p],
+                [0, sin_p,  cos_p]
+            ])
+            rot_matrix = pitch_matrix @ rot_matrix
+
+        return rot_matrix
+
     def invoke_vr(self, src_image, dst_image, dst_size, rot_matrix, fov, leveling_offset=0, yaw_offset=0, eye=0, screen_width=4.4, screen_height=2.475, screen_distance=3.0):
             """Project a single, angularly mapped (VR style) src_image to linear dst_image.
 
@@ -533,27 +558,7 @@ class VRProjector(Projector):
             screen_distance is the distance from viewer to screen in meters (flat/mono projections only, default 3.0m)
             """
             # Apply pitch leveling and yaw offsets, if applicable
-            if yaw_offset:
-                cos_p = np.cos(yaw_offset)
-                sin_p = np.sin(yaw_offset)
-                # Rotation matrix for yaw (rotation around Y-axis)
-                yaw_matrix = np.array([
-                    [cos_p, 0, -sin_p],
-                    [0,     1,      0],
-                    [sin_p, 0,  cos_p]
-                ])
-                rot_matrix = yaw_matrix @ rot_matrix
-
-            if leveling_offset:
-                cos_p = np.cos(leveling_offset)
-                sin_p = np.sin(leveling_offset)
-                # Rotation matrix for pitch (rotation around X-axis)
-                pitch_matrix = np.array([
-                    [1,     0,      0],
-                    [0, cos_p, -sin_p],
-                    [0, sin_p,  cos_p]
-                ])
-                rot_matrix = pitch_matrix @ rot_matrix
+            rot_matrix = self.apply_view_adjustments(rot_matrix, leveling_offset, yaw_offset)
 
             mapping = dst_image.map(self.cuda_stream)
 
@@ -794,25 +799,7 @@ class VRProjector(Projector):
             return None
         
         # Apply the same transformations as invoke_vr does to the scene
-        if yaw_offset:
-            cos_p = np.cos(yaw_offset)
-            sin_p = np.sin(yaw_offset)
-            yaw_matrix = np.array([
-                [cos_p, 0, -sin_p],
-                [0,     1,      0],
-                [sin_p, 0,  cos_p]
-            ])
-            rot_matrix = yaw_matrix @ rot_matrix
-
-        if leveling_offset:
-            cos_p = np.cos(leveling_offset)
-            sin_p = np.sin(leveling_offset)
-            pitch_matrix = np.array([
-                [1,     0,      0],
-                [0, cos_p, -sin_p],
-                [0, sin_p,  cos_p]
-            ])
-            rot_matrix = pitch_matrix @ rot_matrix
+        rot_matrix = self.apply_view_adjustments(rot_matrix, leveling_offset, yaw_offset)
         
         # Extract forward direction from rotation matrix (third column, negated)
         # In OpenXR convention, forward is -Z

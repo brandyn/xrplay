@@ -165,9 +165,11 @@ class VideoPlayer(object):
         Presently this may block for many seconds as the entire audio
             channel is read into memory...
         """
-        opts = self.opts
+        print(f"---\nLaunching {self.io.play}")
 
-        self.audio_out = None
+        opts               = self.opts
+        self.audio_out     = None
+        default_projection = opts.projection or (opts.xr_mode and '180') or 'mono'
 
         if opts.video_path is None:
 
@@ -181,7 +183,18 @@ class VideoPlayer(object):
             ui_size     = self.io.crop_to_screen((2048, 2048), False)
             self.source = self.closable2(VideoBrowserSource(opts.root_dir, ui_size, create=opts.create))
 
-            fps = 60    # Max framerate of the 2D UI
+            fps                = self.source.framerate
+            default_projection = 'mono'
+
+        elif opts.video_path.endswith('.jpg'):
+            from CardboardDecoder import CardboardDecoder
+            self.source = self.closable2(CardboardDecoder(opts.video_path))
+            if opts.audio:
+                print("Decoding Audio: ", flush=True, end='')
+                self.audio_data = self.source.raw_audio()
+                print(f"{self.audio_data.shape}")
+            fps                = self.source.framerate
+            default_projection = '360'
         else:
             #
             # Open the video with the decoder (and register it to be closed at shutdown)
@@ -213,13 +226,11 @@ class VideoPlayer(object):
                     23  : 23.976,
                     }.get(fps, fps)
 
-            print(f"Video   : {self.source.width}x{self.source.height} @ {fps:.2f} ('{self.source.framerate:.2f}') fps")
-            if self.source.duration:
-                print(f"Duration: {self.source.duration:.2f} seconds ({self.source.frame_count} frames)")
-            else:
-                print( "          (No duration specified).")
-
-            source_size = (self.source.width, self.source.height)
+        print(f"Video   : {self.source.width}x{self.source.height} @ {fps:.2f} ('{self.source.framerate:.2f}') fps")
+        if self.source.duration:
+            print(f"Duration: {self.source.duration:.2f} seconds ({self.source.frame_count} frames)")
+        else:
+            print(f"Duration: N/A")
 
         #
         # Establish the frame rate:
@@ -235,17 +246,17 @@ class VideoPlayer(object):
             self.pitch_adjustment = xinfo.get('pitch', 0)
             self.yaw_adjustment   = xinfo.get('yaw'  , 0)
             self.screen_dist_adj  = xinfo.get('dist' , 1)
-            projection            = xinfo.get('proj' , opts.projection or (opts.xr_mode and '180' or 'mono'))
+            projection            = xinfo.get('proj' , default_projection)
         else:
             self.pitch_adjustment = 0
             self.yaw_adjustment   = 0
             self.screen_dist_adj  = 1
-            projection            = opts.projection or (opts.xr_mode and '180' or 'mono')
+            projection            = default_projection
 
         if opts.video_path:
 
             for p in opts.plugins:
-                p.init_video(opts.video_path, info, source_size, fps, key_down=self.key_down)
+                p.init_video(opts.video_path, info, fps, key_down=self.key_down)
 
             if opts.audio:
                 print("Opening audio device")
@@ -277,7 +288,6 @@ class VideoPlayer(object):
             while not self.io.quitted:  # Per-source loop
 
                 if self.io.play:
-                    print(f"Launching {self.io.play}")
                     opts.video_path = f"{opts.root_dir}/{self.io.play}"
                     self.io.play    = None
 
@@ -671,6 +681,13 @@ class VideoPlayer(object):
             standards for where it goes we can change that
             here).
         """
+        # Until we come up with a different naming convention for thumbnails,
+        #  this would overwrite any jpgs (e.g. Google Cardboard panoramas...)
+        #  so we can't do that...  TODO
+        if video_path.lower().endswith('.jpg'):
+            print(f"Can't thumbnail jpgs yet. ({video_path})")
+            return
+
         import cv2
         path = Path(video_path).with_suffix('.jpg')
         print(f"Saving thumbnail: {path}")

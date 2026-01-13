@@ -86,7 +86,7 @@ class VideoBrowserPlugin(object):
     Video browser with tags, ratings, and filtering.
     Pure UI component - no VR dependencies.
     """
-    ALLOWED_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv', '.wmv', '.m4v'}
+    ALLOWED_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv', '.wmv', '.m4v', '.mpg'}
 
     # HACK to persist UI state across instantiations:
     selected_video    = None
@@ -1133,9 +1133,8 @@ class VideoBrowserPlugin(object):
                 # Load image
                 img = Image.open(jpg_path)
                 img = img.convert('RGB')
-                # Optionally downsize the thumbnail (not needed if originals are good thumbnail size)
-                if False:
-                    img.thumbnail((256, 256), Image.Resampling.LANCZOS)
+                if img.width > 512 or img.height > 512:
+                    img.thumbnail((512, 512), Image.Resampling.LANCZOS)
                 
                 width, height = img.size
                 
@@ -1268,7 +1267,8 @@ class VideoBrowserPlugin(object):
         #
         if directory.exists():
             for item in list(directory.iterdir()):
-                if item.is_file() and item.suffix.lower() in self.ALLOWED_EXTENSIONS:
+                # HACK special case for google cardboard jpgs which we're requiring to be called .vr.jpg for now...
+                if item.is_file() and (item.suffix.lower() in self.ALLOWED_EXTENSIONS or item.name.lower().endswith('.vr.jpg')):
                     # Skip empty/placeholder files
                     if item.stat().st_size == 0:
                         continue
