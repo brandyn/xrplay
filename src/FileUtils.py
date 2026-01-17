@@ -1,6 +1,8 @@
 
 import pickle
 import os, stat
+import tempfile
+import shutil
 
 def file_exists(path):
     "Returns true if path refers to any existing object (including a dead symlink)"
@@ -88,15 +90,16 @@ class InfoFile(object):
 
         if self.filename and self.items is not None and self.dirty:
 
-            tempname = temp_filename_for(self.filename)
-            with open(tempname, 'wb') as fl:
+            with tempfile.NamedTemporaryFile('wb', delete_on_close=False) as fl:
                 pickle.dump(self.items, fl)
-            if verify:
-                with open(tempname, 'rb') as fl:
-                    items = pickle.load(fl)
-                assert items == self.items
-            os.rename(tempname, self.filename)
-            self.dirty = False
+                fl.close()
+
+                if verify:
+                    with open(fl.name, 'rb') as ro_fl:
+                        items = pickle.load(ro_fl)
+                    assert items == self.items
+                shutil.copy(fl.name, self.filename)
+                self.dirty = False
 
             return True
         else:
