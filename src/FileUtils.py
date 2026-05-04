@@ -10,6 +10,16 @@ def file_exists(path):
     except:
         return False
 
+def temp_filename_for(refpath, startswith="TEMP."):
+    """Creates a temporary filename which is matched to, and a sibling of, refpath.
+    The temp file name will be *consistent* for refpath, not unique or varied from call to call.
+    The temp file name will start with startswith (which can start with a '.' if you want).
+
+    For now, this just inserts startswith before the base filename in refpath, so choose wisely.
+    """
+    head, tail = os.path.split(refpath)
+    return os.path.join(head, startswith+tail)
+
 
 class InfoFile(object):
 
