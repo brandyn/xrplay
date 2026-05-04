@@ -97,13 +97,14 @@ class VideoBrowserPlugin(object):
     sort_by           = "name"  # name, date, rating, size
     search_text       = ""
 
-    def __init__(self, video_root, size=(1920, 1080), readonly=False, create=False):
+    def __init__(self, video_root, size=(1920, 1080), readonly=False, create=False, plugins=[]):
         """readonly blocks any attempts to change the database (or delete
             files) and simply logs them instead.
         """
         self.video_root = Path(video_root)
         self.size       = size
         self.readonly   = readonly
+        self.plugins    = plugins
         
         # UI Scale - can be changed at runtime
         self.ui_scale = 2.0
@@ -152,6 +153,7 @@ class VideoBrowserPlugin(object):
         self.all_videos      = []
         self.filtered_videos = []
         self.all_tags        = []
+        self.all_path_tags   = []   # Mostly an extension of all_tags but separate UI grouping and not in tag suggestions
         
         # Action callback
         self.action_callback = None
@@ -239,6 +241,7 @@ class VideoBrowserPlugin(object):
             self.all_videos      = []
             self.filtered_videos = []
             self.all_tags        = []
+            self.all_path_tags   = []
             return
         
         # Load all videos
@@ -265,10 +268,16 @@ class VideoBrowserPlugin(object):
         # Load all tags
         tag_counts = {}
         for video in self.all_videos:
-            for tag in video['tags'] + video['path_tags']:
+            for tag in video['tags']:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        
-        self.all_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
+        self.all_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)    # Sort reverse on count
+
+        # Load all path tags:
+        tag_counts = {}
+        for video in self.all_videos:
+            for tag in video['path_tags']:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        self.all_path_tags = sorted(tag_counts.items(), key=lambda x: x[0])   # Sort forward on name
         
         # Apply filters
         self._apply_filters()
@@ -298,6 +307,10 @@ class VideoBrowserPlugin(object):
         else:
             filtered = [v for v in filtered if v['rating'] >= self.min_rating]
         
+        # Plugins:
+        for p in self.plugins:
+            filtered = [v for v in filtered if p.browser_filter(v)]
+
         # Sort
         if self.sort_by == "name":
             filtered.sort(key=lambda v: v['name'].lower())
@@ -609,45 +622,52 @@ class VideoBrowserPlugin(object):
                 self.store.min_rating = 0
             self._apply_filters()
         
+        changed = False
+        for p in self.plugins:
+            changed |= p.browser_render_filters()
+        if changed:
+            self._apply_filters()
+
         # Tag filters with wrapping
-        if self.all_tags:
-            #imgui.text("Tags:")
-            imgui.text("")
-            
-            # Calculate available width for tags
-            available_width = imgui.get_content_region_available()[0]
-            
-            # Render tags with wrapping
-            cursor_x_start = imgui.get_cursor_pos()[0]
-            current_line_width = 0
-            first_tag = True
-            
-            for tag, count in self.all_tags[:50]:  # Limit displayed tags
-                is_selected = tag in self.selected_tags
+        for (name, group) in [('Tags', self.all_tags), ('Paths', self.all_path_tags)]:
+            if group:
+                imgui.text(f"{name}:")
+                #imgui.text("")
                 
-                # Calculate width needed for this tag checkbox
-                tag_text = f"{tag} ({count})"
-                tag_width = imgui.calc_text_size(tag_text)[0] + self._scaled(30)
+                # Calculate available width for tags
+                available_width = imgui.get_content_region_available()[0]
                 
-                # Check if we need to wrap
-                if current_line_width > 0 and current_line_width + tag_width > available_width:
-                    current_line_width = 0
-                    first_tag = True
-                
-                if not first_tag:
-                    imgui.same_line()
-                
-                clicked, _ = imgui.checkbox(tag_text, is_selected)
-                if clicked:
-                    if is_selected:
-                        self.selected_tags.discard(tag)
-                    else:
-                        self.selected_tags.add(tag)
-                        self.store.filter_no_tags = False
-                    self._apply_filters()
-                
-                current_line_width += tag_width
+                # Render tags with wrapping
+                cursor_x_start = imgui.get_cursor_pos()[0]
+                current_line_width = 0
                 first_tag = False
+                
+                for tag, count in group:
+                    is_selected = tag in self.selected_tags
+                    
+                    # Calculate width needed for this tag checkbox
+                    tag_text = f"{tag} ({count})"
+                    tag_width = imgui.calc_text_size(tag_text)[0] + self._scaled(30)
+                    
+                    # Check if we need to wrap
+                    if current_line_width > 0 and current_line_width + tag_width > available_width:
+                        current_line_width = 0
+                        first_tag = True
+                    
+                    if not first_tag:
+                        imgui.same_line()
+                    
+                    clicked, _ = imgui.checkbox(tag_text, is_selected)
+                    if clicked:
+                        if is_selected:
+                            self.selected_tags.discard(tag)
+                        else:
+                            self.selected_tags.add(tag)
+                            self.store.filter_no_tags = False
+                        self._apply_filters()
+                    
+                    current_line_width += tag_width
+                    first_tag = False
 
         end_cursor_y = imgui.get_cursor_pos()[1]
         return end_cursor_y - start_cursor_y

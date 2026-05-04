@@ -90,8 +90,8 @@ class AudioPlay(object):
         return position / self.sample_rate
     
     def get_current_frame(self):
-        """Get which video frame should be displayed now."""
-        return int(self.get_audio_time() * self.fps)
+        """Get which video frame should be displayed now (potentially fractional/float)."""
+        return self.get_audio_time() * self.fps
     
     def audio_callback(self, in_data, frame_count, time_info, status):
         """PyAudio callback - feeds sequential audio samples."""
@@ -289,7 +289,7 @@ if __name__ == "__main__":
         loop_count = 0
         
         while loop_count < 2:  # Play twice to test looping
-            frame = player.get_current_frame()
+            frame = int(player.get_current_frame())
             
             if frame != last_frame:
                 print(f"Frame {frame:4d} @ {player.get_audio_time():.3f}s (speed={player.speed}x)", end='\r')

@@ -10,6 +10,7 @@ from GLop          import render_GL_texture_to_window
 from IO_glfw       import IO_glfw
 
 import Info
+from Utils import Button
 
 projection_cycle = [
         'mono',
@@ -181,7 +182,7 @@ class VideoPlayer(object):
             #
             from UI2D.VideoBrowserSource import VideoBrowserSource
             ui_size     = self.io.crop_to_screen((2048, 2048), False)
-            self.source = self.closable2(VideoBrowserSource(opts.root_dir, ui_size, create=opts.create))
+            self.source = self.closable2(VideoBrowserSource(opts.root_dir, ui_size, create=opts.create, plugins=self.opts.plugins))
 
             fps                = self.source.framerate
             default_projection = 'mono'
@@ -235,7 +236,7 @@ class VideoPlayer(object):
         #
         # Establish the frame rate:
         #
-        self.frame_time      = 1.0 / fps
+        self.frame_duration  = 1.0 / fps
         self.last_frame_time = time()
 
         # Initialize plugins and other saved state:
@@ -256,7 +257,7 @@ class VideoPlayer(object):
         if opts.video_path:
 
             for p in opts.plugins:
-                p.init_video(opts.video_path, info, fps, key_down=self.key_down)
+                p.init_video(opts.video_path, info, fps)
 
             if opts.audio:
                 print("Opening audio device")
@@ -287,11 +288,12 @@ class VideoPlayer(object):
         try:
             while not self.io.quitted:  # Per-source loop
 
+                # Hack "global" where anyone can queue up the next thing to play:
                 if self.io.play:
                     opts.video_path = f"{opts.root_dir}/{self.io.play}"
                     self.io.play    = None
 
-                if self.launch_video():
+                if self.launch_video(): # Launches self.opts.video_path
                     break
 
                 paused       = False
@@ -456,13 +458,13 @@ class VideoPlayer(object):
                     #
                     # Wait until it's time to display this frame (swap buffers):
                     #
-                    next_frame_time = self.last_frame_time + self.frame_time
+                    next_frame_time = self.last_frame_time + self.frame_duration
                     now             = timers.start("sleep") if timers else time()
                     sleep_time      = next_frame_time - now
 
                     if sleep_time > 0 and not opts.no_delay:
                         sleep(sleep_time)
-                        self.last_frame_time += self.frame_time
+                        self.last_frame_time += self.frame_duration
                     else:
                         self.last_frame_time = now
 
@@ -509,7 +511,7 @@ class VideoPlayer(object):
                         if opts.video_path:
                             # Video playing:
                             for p in opts.plugins:
-                                p.ui(paused, left)
+                                p.ui(paused, self.io, left)
                         else:
                             # Browser active:
                             #
@@ -536,7 +538,7 @@ class VideoPlayer(object):
 
                         if opts.video_path:
                             for p in opts.plugins:
-                                p.ui(paused)
+                                p.ui(paused, self.io)
 
                     self.source.handle_events(self.io)  # This may consume some keys (notably 'escape' in some contexts)
 
@@ -555,7 +557,7 @@ class VideoPlayer(object):
                                 if key == ' ':
                                     paused = not paused
                                     if paused:
-                                        print(f"FRAME: {frame_number}")
+                                        print(f"FRAME: {int(frame_number)}")
                                 elif key == 'p':
                                     self.cycle_projection()
 
@@ -609,7 +611,7 @@ class VideoPlayer(object):
                                 if frame_number < 0:
                                     frame_number = 0
                                 if frame_number != pfn:
-                                    print(f"FRAME: {frame_number}")
+                                    print(f"FRAME: {int(frame_number)}")
                             else:
                                 #
                                 # Non-XR mode controls while not paused:
@@ -617,7 +619,7 @@ class VideoPlayer(object):
                                 for key in self.io.keystrokes:
                                     if key == ' ':
                                         paused = True
-                                        print(f"FRAME: {frame_number}")
+                                        print(f"FRAME: {int(frame_number)}")
                                     elif key == 'p':
                                         self.cycle_projection()
 
@@ -693,7 +695,7 @@ class VideoPlayer(object):
         print(f"Saving thumbnail: {path}")
         if path.exists():
             bak = gen_backup_path(path)
-            print(f"(Backing up old thumbnail to {bak}")
+            print(f"(Backing up old thumbnail to {bak})")
             path.rename(bak)
         cv2.imwrite(str(path), bgr512)
 
@@ -776,22 +778,6 @@ class VideoPlayer(object):
         for p in self.opts.plugins:
             #print("Closing {p}")
             p.close()
-
-# Helpers:
-class Button(object):
-    """Just detects False->True transitions."""
-    __slots__ = ('down',)
-
-    def __init__(self):
-        self.down = False
-
-    def click(self, down):
-        """Call this with the current state.
-        Returns True once when down first transitions to True.
-        """
-        click     = down and not self.down
-        self.down = down
-        return click
 
 def gen_backup_path(path: Path) -> Path:
     counter = 0

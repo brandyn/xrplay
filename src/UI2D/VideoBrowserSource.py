@@ -23,11 +23,11 @@ class VideoBrowserSource(VideoSource):
     #  duct tape to cram a DualRenderer into the existing video playback
     #  pipeline...)
     #
-    def __init__(self, rootdir, size, create=False):
+    def __init__(self, rootdir, size, **kargs):
 
         self.size      = (self.width, self.height) = size
         self.framerate = 60.0
-        self.renderer  = VideoBrowserRenderer(rootdir, size, create=create)
+        self.renderer  = VideoBrowserRenderer(rootdir, size, **kargs)
 
     def get_frame(self, frame_number, io):
         if io.size != self.size:

@@ -117,6 +117,9 @@ class IO(object):
         #  and such will update during this.
         pass
 
+    def key_down(self, key):
+        return key in self.keys_down
+
     def quit(self):
         "Sets the flag, but also subclass may initiate back-end specific exit."
         self.quitted = True
