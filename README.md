@@ -69,7 +69,26 @@ xrplay video.mp4 -f     # Fullscreen desktop and VR playback at the same time
 xrplay -h               # Show help
 ```
 
-- **Controls**: Press escape to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.  When paused, right stick controls pan/tilt.
+- **Controls**: Press escape to quit. Arrows control speed.  Space bar pauses.  VR: Right controller stick controls speed; press to reset.  Buttons are pause and quit.  When paused, right stick controls pan/tilt.  Press 'p' to cycle projection.
+
+| Key | XR Control | in mode | Action |
+|-------|----------|---------|------|
+| escape | B button | any | back out / quit |
+| p | - | any | cycle projection |
+| space | A button | playing | pause |
+| right arrow | - | playing | 10x speed |
+| left arrow | - | playing | -10x speed |
+| up arrow | - | playing | 100x speed |
+| down arrow | - | playing | 1/2 speed |
+| - | right stick | playing | speed/slow |
+| - | right stick click | playing | 1x speed |
+| space | A button | paused | play |
+| T | - | paused | save thumbnail |
+| - | right stick | paused | view angle |
+| right arrow | - | paused | forward 1 frame |
+| left arrow | - | paused | backward 1 frame |
+| up arrow | - | paused | forward 10 frames |
+| down arrow | - | paused | backward 10 frames |
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.
